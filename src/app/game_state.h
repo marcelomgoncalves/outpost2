@@ -367,6 +367,7 @@ public:
     void debugAutoOreRoute(bool on) { m_autoOreRoute = on; }
     // --bannertest: a vista em coordenadas de TELA, para o teste saber onde o
     // letreiro deveria estar centrado.
+    void debugCamera(int& x, int& y) const { x = m_camX; y = m_camY; }
     void debugViewRect(int& x, int& y, int& w, int& h) const {
         x = kViewX; y = kViewY; w = viewportW(); h = viewportH();
     }

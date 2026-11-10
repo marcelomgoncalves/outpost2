@@ -48,7 +48,7 @@ com o registro de `src/mission/op2_api.cpp`.
 
 ```
 src/
-  main.cpp        entrada + os 108 modos de teste/captura
+  main.cpp        entrada + os 109 modos de teste/captura
   app/            TApp, UIState, GameState (o jogo), ShellState, HUD,
                   as 6 abas do quadro, minimapa, globo, diálogos
   game/           a simulação: unidades, estruturas, movimento, pathfinder,
@@ -2162,7 +2162,7 @@ recorte aplicado também aos pedaços não marcados **1**.
 > não passava da borda. Foi a captura **no jogo**, com o caminhão atracado,
 > que mostrou o braço vazando.
 
-### Achado no caminho, **não** alterado: a ordem de desenho
+### Achado no caminho: a ordem de desenho (portada na 5.26)
 
 O original desenha prédios e veículos **numa passada só**, na ordem da lista de
 unidades, que `sub_43E7E0` mantém **ordenada por Y** (`[+0x18]`): é um
@@ -2171,7 +2171,81 @@ alto é coberto por ele. O porte desenha **todos os prédios e depois todos os
 veículos** (`GameState::onIdle`, os "três passes"), então o veículo sempre sai
 por cima. Não era isso que mostrava o braço da doca — o caminhão atracado tem Y
 maior que o centro do prédio e sai por cima nas duas ordens —, e mudar a ordem
-mexe no visual do jogo inteiro. Fica registrado para decisão.
+mexe no visual do jogo inteiro; ficou para decisão, e foi portada em seguida
+(seção 5.26).
+
+---
+
+## 5.26. A ordem de desenho do original (2026-11-10)
+
+O porte desenhava **todos os prédios, depois todos os veículos, depois os
+efeitos**, percorrendo as unidades **por índice**. Um veículo passando atrás
+(ao norte) de um prédio alto saía sempre **por cima** dele.
+
+### O que o original faz
+
+`sub_49EA90` monta, a cada quadro, duas listas com as unidades visíveis — **na
+ordem da lista por Y** (`dword_54EC0C`, que `sub_43E7E0` mantém ordenada por
+`[+0x18]` no fim de cada laço de tique) — e `sub_49E8C0` desenha:
+
+| leva | quem | como |
+|---|---|---|
+| 1 | **lista A**: prédios **e** veículos | juntos, de cima para baixo no mapa |
+| 2 | **lista B** sem `0x200` | armas e projéteis, explosões de prédio, animação de ambiente, beacons, fumarolas, respiradouros |
+| 3 | **lista B** com `0x200` | os desastres: raio `0x4C`, tornado `0x4D`, terremoto `0x4E`, erupção `0x4F`, meteoro `0x50` |
+
+A lista B são as unidades com `[+0x44] & 0x140`. O porte não modelava esses
+bits; a classificação veio do binário, sem chute:
+
+- o `0x100` não vem da classe, vem do **descritor do tipo**: a criação
+  genérica (`sub_4466B0`) faz `unidade[+0x44] |= desc[+0x1F4]`, e o `init`
+  (`vt[4]`) de 31 vtables de descritor liga esse bit. Lendo o nome de cada uma
+  (o `vt[1]` do descritor devolve o *code name*), **têm** `0x100`: todas as
+  armas (`LASER`, `CANNON`, `ACID`, `EMP_BIG`...), `BLD_EXPL_SML/MED/BIG`,
+  `AMBIENT_ANIM`, `BEACON`, `FUMAROLE`, `MAGMA_VENT`, `SHUTTLE`, `WRECK_FLAG` e
+  os desastres; **não têm**: todos os prédios e todos os veículos. O míssil do
+  Spaceport liga o bit no construtor da própria classe (`sub_4807F0`);
+- o `0x40` só é ligado por uma classe que **não desenha nada**
+  (`off_4D5D48`, slot 6 = `nullsub_65`) — irrelevante para a ordem;
+- o `0x200` é ligado pela base dos desastres (`off_4D73A0`, `sub_4A7E70`) e
+  nenhuma derivada o desliga: terremoto `sub_413510`, raio `sub_432DF0`,
+  meteoro `sub_44A1F0`, erupção `sub_4A8120`, tornado `sub_48F3D0`.
+
+No porte isso vira: lista A = `UNIT_BUILDING | UNIT_VEHICLE`; lista B = o
+resto; última leva = tipos `0x4C..0x50`. E o laço passa a percorrer a lista
+por Y (`unitListFirst/unitListNext`), que o porte já mantinha igual à do
+original para o tique — o desenho é que não a usava. As decorações de cada
+unidade (torre, espuma, EMP, luzes) são do `vt[0x18]` dela e vêm junto.
+
+O sorteio que existe dentro do laço (fumaça de prédio danificado) usa um
+gerador **local**, semeado por unidade — mudar a ordem não mexe na simulação.
+
+### O teste — `--drawordertest <mapa>`
+
+Cada caso renderiza a mesma cena quatro vezes (as duas unidades, só uma, só a
+outra, nenhuma) e olha os pixels em que **as duas** desenham: ali, o quadro
+completo tem de ser igual ao de quem ficou **na frente**.
+
+1. **Veículo ao norte** de um Command Center: o **prédio** na frente em 433 dos
+   443 pixels de sobreposição, o veículo em **nenhum** — era o defeito.
+2. **Efeito da lista B ao norte** do prédio: o efeito na frente, apesar do Y
+   menor.
+3. **Desastre contra efeito:** um tornado, com o efeito de Y **maior** e criado
+   **depois** — nem a ordem por Y nem a de criação dariam a resposta certa — e o
+   tornado fica na frente nos 1042 pixels.
+4. **Caminhão na doca** de uma fundição (dentro da linha de baixo do prédio):
+   o caminhão na frente — a doca continua como estava.
+
+Neutralizando, uma peça de cada vez: a ordem antiga inteira **4** falhas; a
+lista por Y mas com prédios antes de veículos **2**; sem a leva do `0x200`
+**2**; a lista A percorrida por índice **2**; tudo junto na lista por Y, sem
+lista B, **4**.
+
+> Duas premissas que o teste ensinou: o sprite de um prédio **não desce** abaixo
+> do próprio footprint (um veículo na linha logo abaixo nem encosta nele — por
+> isso o caso "ao sul" é a doca); e meteoro, raio e tornado só **desenham**
+> depois de alguns tiques ativos, então o caso deixa o jogo andar até o desastre
+> aparecer e só então congela.
 
 ---
 
@@ -2196,7 +2270,7 @@ missão e os recursos originais do diretório de trabalho).
 
 ### Testes por linha de comando
 
-São 108 modos. Os que cobrem regressão de verdade:
+São 109 modos. Os que cobrem regressão de verdade:
 
 | Modo | O que prova |
 |---|---|
@@ -2219,6 +2293,7 @@ São 108 modos. Os que cobrem regressão de verdade:
 | `--autoroutetest <mapa>` | a rota de minério automática: a fundição disponível mais próxima, as três minas, as duas raças, e o ciclo rodando |
 | `--pushtest <mapa>` | o veículo parado sai da frente: a doca, a regra da arma, o encurralado, e a invariante de ocupação a cada tique |
 | `--artcliptest` | o recorte por pedaço dos sprites: a carga da doca cortada na borda do poço, contra a composição crua |
+| `--drawordertest <mapa>` | a ordem de desenho: veículo atrás de prédio, efeitos por cima, desastres por último, a doca |
 | `--missiontest <DLL> <saida> <ticks>` | carrega e roda qualquer missão |
 | `--aitest <DLL campanha> <DLL multi>` | o `AILevel` chega ao jogador 0 e o multijogador fica intacto |
 | `--helptest [tópico]` | o leitor do `.HLP` e a navegação da tela do manual |

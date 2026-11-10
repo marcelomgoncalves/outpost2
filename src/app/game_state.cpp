@@ -1062,15 +1062,30 @@ void GameState::onIdle(Renderer& renderer, float dt) {
         drawSprite(raw - 0x65, 0, screenXOf(unitOX(r)), unitOY(r) - m_camY, pc);
     }
 
-    // Tres passes: ESTRUTURAS primeiro (ficam por baixo), depois veiculos e por
-    // fim as unidades-efeito (explosoes) por cima.
+    // A ordem do original. sub_49EA90 separa as unidades visiveis em duas
+    // listas, NA ORDEM DA LISTA POR Y (dword_54EC0C, que sub_43E7E0 mantem
+    // ordenada por [+0x18]), e sub_49E8C0 desenha:
+    //   1. a lista A -- PREDIOS E VEICULOS JUNTOS, de cima para baixo no mapa:
+    //      um veiculo que passa ATRAS (ao norte) de um predio e coberto por ele;
+    //   2. a lista B sem o bit 0x200 -- quem tem [+0x44] & 0x140: armas e
+    //      projeteis, explosoes de predio, animacao de ambiente, beacons,
+    //      fumarolas, respiradouros (o 0x100 vem do desc+0x1F4, que o init de
+    //      cada descritor liga; sub_4466B0 o copia na criacao);
+    //   3. a lista B com 0x200 -- os desastres: raio 0x4C, tornado 0x4D,
+    //      terremoto 0x4E, erupcao 0x4F e meteoro 0x50 (a base off_4D73A0,
+    //      sub_4A7E70, liga o 0x200).
+    // O porte desenhava todos os predios, depois todos os veiculos, e
+    // percorria as unidades por indice -- o veiculo saia sempre por cima.
+    // As decoracoes de cada unidade (torre, espuma, EMP, luzes) sao do vt[0x18]
+    // dela e vem junto, na mesma camada.
+    const auto desastre = [](map_id t) { return t >= 0x4C && t <= 0x50; };
     for (int pass = 0; pass < 3; ++pass)
-    for (size_t i = 1; i < g_units.size(); ++i) {
+    for (int i = unitListFirst(); i != 0; i = unitListNext(i)) {
         const UnitRecord& r = g_units[i];
         if (r.id == -1 || (r.flags & UNIT_DEAD)) continue;
         const bool isBld = (r.flags & UNIT_BUILDING) != 0;
         const bool isEffect = !(r.flags & (UNIT_BUILDING | UNIT_VEHICLE));
-        if (pass != (isBld ? 0 : isEffect ? 2 : 1)) continue;
+        if (pass != (!isEffect ? 0 : desastre(r.type) ? 2 : 1)) continue;
         // Sombras pela opção do INI da classe (dword_575634 / dword_575638).
         setArtShadows(isBld ? m_stationaryShadows : m_mobileShadows);
         // Centro da unidade na tela = [+0x14]/[+0x18] do original (unitOX/OY:

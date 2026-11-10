@@ -24,7 +24,9 @@
 > **5.24** (a vehicle parked in the way — on a dock, say — is pushed aside,
 > as `sub_44B650`/`sub_44BBA0` do; the port used to drive into occupied cells)
 > and **5.25** (the art format's per-piece clip rectangles, `sub_403E00`, now
-> applied when drawing: the docking truck's load no longer pokes out of the bay). The recent changes are summarised in
+> applied when drawing: the docking truck's load no longer pokes out of the bay)
+> and **5.26** (the original draw order: buildings and vehicles together in the
+> Y-sorted unit list, then effects, then disasters — `sub_49E8C0`). The recent changes are summarised in
 > [README.EN.md](README.EN.md).
 
 # Outpost 2: Divided Destiny — Modern Port (C++17/SDL2)
@@ -75,7 +77,7 @@ coverage by comparing the DLLs' import tables against the registry in
 
 ```
 src/
-  main.cpp        entry point + the 108 test/capture modes
+  main.cpp        entry point + the 109 test/capture modes
   app/            TApp, UIState, GameState (the game), ShellState, HUD,
                   the frame's 6 tabs, minimap, globe, dialogs
   game/           the simulation: units, structures, movement, pathfinder,
@@ -657,7 +659,7 @@ mission DLLs and the original resources from the working directory).
 
 ### Command-line tests
 
-There are 108 modes. The ones that cover real regressions:
+There are 109 modes. The ones that cover real regressions:
 
 | Mode | What it proves |
 |---|---|

@@ -4350,6 +4350,207 @@ static int runBannerTest(const std::string& dll, const std::string& shot) {
     return ruins ? 1 : 0;
 }
 
+// --drawordertest <mapa>: a ORDEM de desenho do original (sub_49EA90 +
+// sub_49E8C0): predios e veiculos juntos, de cima para baixo no mapa (a lista
+// por Y); depois os efeitos com [+0x44] & 0x140; por ultimo os desastres
+// (0x200). O porte desenhava todos os predios e depois todos os veiculos.
+//
+// Cada caso renderiza a mesma cena quatro vezes (as duas unidades, so uma, so a
+// outra, nenhuma) e olha os pixels em que AS DUAS desenham: ali, o quadro
+// completo tem de ser igual ao de quem ficou NA FRENTE.
+static int runDrawOrderTest(const std::string& mapName, const std::string& shot) {
+    if (SDL_Init(SDL_INIT_VIDEO) != 0) return 1;
+    op2::g_ResManager.init(".");
+    op2::g_art.load();
+    op2::Renderer renderer;
+    if (!renderer.init("OP2 drawordertest", 1280, 960, false)) { SDL_Quit(); return 1; }
+    op2::GameState gs;
+    if (!gs.load(mapName)) { renderer.shutdown(); SDL_Quit(); return 2; }
+    gs.onActivate();
+    op2::resetUnits();
+
+    const int MW = op2::g_gameMap.width(), MH = op2::g_gameMap.height();
+    int bx = -1, by = -1;
+    for (int y = 6; y < MH - 12 && bx < 0; ++y)
+        for (int x = 6; x < MW - 12 && bx < 0; ++x) {
+            bool ok = true;
+            for (int dy = -4; dy <= 6 && ok; ++dy)
+                for (int dx = -5; dx <= 5 && ok; ++dx)
+                    if (!op2::g_gameMap.isPassable(op2::LOCATION{x + dx, y + dy})) ok = false;
+            if (ok) { bx = x; by = y; }
+        }
+    if (bx < 0) { std::printf("[Ordem] sem area livre\n"); return 3; }
+
+    // Um predio alto: o Command Center.
+    op2::Unit predio;
+    op2::TethysGame::CreateUnit(predio, op2::mapCommandCenter, op2::LOCATION{bx, by}, 0);
+    int fw = 0, fh = 0;
+    op2::buildingFootprint(op2::mapCommandCenter, fw, fh);
+    const int topo = by - fh / 2, base = topo + fh;       // 1a linha e a linha logo abaixo
+
+    gs.onIdle(renderer, 0.0f);                            // acerta o tamanho do quadro
+    const int W = renderer.getWidth();
+    int vx = 0, vy = 0, vw = 0, vh = 0;
+    gs.debugViewRect(vx, vy, vw, vh);
+    gs.setCamera(bx * 32 - vw / 2, by * 32 - vh / 2);
+
+    // Renderiza com as unidades de `esconde` fora (marcadas mortas so no quadro).
+    const auto quadro = [&](std::vector<int> esconde) {
+        std::vector<uint32_t> salvas;
+        for (int id : esconde) { salvas.push_back(op2::g_units[id].flags); op2::g_units[id].flags |= op2::UNIT_DEAD; }
+        gs.onIdle(renderer, 0.0f);                        // dt = 0: nenhum turno anda
+        for (size_t k = 0; k < esconde.size(); ++k) op2::g_units[esconde[k]].flags = salvas[k];
+        std::vector<uint32_t> out;
+        const uint32_t* fb = renderer.getFramebuffer();
+        for (int y = vy; y < vy + vh; ++y)                // so a VISTA: o minimapa tambem muda
+            for (int x = vx; x < vx + vw; ++x) out.push_back(fb[(size_t)y * W + x]);
+        return out;
+    };
+    struct Frente { int a = 0, b = 0, sobreposicao = 0; };
+    // Quem fica na frente entre `a` e `b`, contando so onde os dois desenham.
+    const auto quemNaFrente = [&](int a, int b) {
+        op2::unitListSort();                              // a lista por Y em dia (sub_43E7E0)
+        const std::vector<uint32_t> ambos = quadro({}), soA = quadro({b}), soB = quadro({a}),
+                                    nada = quadro({a, b});
+        Frente f;
+        for (size_t i = 0; i < ambos.size(); ++i) {
+            if (soA[i] == nada[i] || soB[i] == nada[i] || soA[i] == soB[i]) continue;
+            ++f.sobreposicao;
+            if (ambos[i] == soA[i]) ++f.a;
+            else if (ambos[i] == soB[i]) ++f.b;
+        }
+        return f;
+    };
+
+    struct Caso { std::string nome; long long obtido; long long esperado; };
+    std::vector<Caso> casos;
+    const auto tira = [&](int id) { op2::g_gameMap.clearUnitOccupancy(op2::g_units[id].pixelX >> 5, op2::g_units[id].pixelY >> 5);
+                                    op2::g_units[id].flags |= op2::UNIT_DEAD; };
+
+    // 1) veiculo AO NORTE do predio: o predio fica na frente.
+    {
+        op2::Unit v;
+        op2::TethysGame::CreateUnit(v, op2::mapCargoTruck, op2::LOCATION{bx, topo - 1}, 0);
+        const Frente f = quemNaFrente(predio.id(), v.id());
+        if (!shot.empty()) {
+            const std::vector<uint32_t> cena = quadro({});
+            if (writeBmp32(shot, cena.data(), vw, vh)) std::printf("[Ordem] quadro salvo em %s\n", shot.c_str());
+        }
+        std::printf("[Ordem] veiculo ao norte: sobreposicao %d, predio na frente %d, veiculo na frente %d\n",
+                    f.sobreposicao, f.a, f.b);
+        casos.push_back({"norte: os dois se sobrepoem (premissa)", f.sobreposicao > 20 ? 1 : 0, 1});
+        casos.push_back({"norte: o PREDIO fica na frente", f.a > 0 ? 1 : 0, 1});
+        casos.push_back({"... e o veiculo nao aparece por cima", f.b, 0});
+        tira(v.id());
+    }
+    // 3) efeito da lista B AO NORTE do predio (Y menor): ainda assim na frente.
+    {
+        const int e = op2::createAmbientAnim(bx * 32 + 16, (topo - 1) * 32 + 16, 598, 1000, 0);
+        const Frente f = quemNaFrente(predio.id(), e);
+        std::printf("[Ordem] efeito ao norte: sobreposicao %d, predio na frente %d, efeito na frente %d\n",
+                    f.sobreposicao, f.a, f.b);
+        casos.push_back({"efeito: os dois se sobrepoem (premissa)", f.sobreposicao > 20 ? 1 : 0, 1});
+        casos.push_back({"efeito (lista B) fica na frente do predio", f.b > 0 ? 1 : 0, 1});
+        casos.push_back({"... sempre", f.a, 0});
+        op2::g_units[e].flags |= op2::UNIT_DEAD;
+    }
+    // 4) desastre (0x200) contra um efeito da lista B: o desastre, na ultima
+    //    leva, fica na frente. Usa o primeiro desastre que DESENHA num quadro
+    //    parado (o meteoro, por exemplo, so aparece caindo). O desastre e criado
+    //    ANTES do efeito, para a ordem de criacao nao dar a resposta certa por
+    //    acaso -- e o efeito vai com Y MAIOR, para a ordem por Y tambem nao.
+    {
+        int camX = 0, camY = 0;
+        gs.debugCamera(camX, camY);
+        const int tx = bx + 5, ty = topo - 1;
+        int des = 0, ml = 1 << 30, mt = 1 << 30, mr = -1, mb = -1;
+        const char* nome = "-";
+        for (int tentativa = 0; tentativa < 4 && !des; ++tentativa) {
+            int tipo = 0;
+            if (tentativa == 0) { op2::setTornado(tx, ty, 1000, tx, ty, 1); tipo = 0x4D; nome = "tornado"; }
+            if (tentativa == 1) { op2::setLightning(tx, ty, 1000, tx, ty);  tipo = 0x4C; nome = "raio"; }
+            if (tentativa == 2) { op2::setEruption(tx, ty, 1);               tipo = 0x4F; nome = "erupcao"; }
+            if (tentativa == 3) { op2::setMeteor(tx, ty, 2);                 tipo = 0x50; nome = "meteoro"; }
+            int id = 0;
+            for (int i = 1; i < (int)op2::g_units.size(); ++i)
+                if (op2::g_units[i].id != -1 && !(op2::g_units[i].flags & op2::UNIT_DEAD) && op2::g_units[i].type == tipo) id = i;
+            if (!id) continue;
+            // Raio, tornado e meteoro so desenham depois de alguns tiques ativos:
+            // anda ate o desastre aparecer (ou morrer), e entao congela.
+            for (int t = 0; t < 400 && !des; ++t) {
+                if (t % 5 == 0) {
+                    if (op2::g_units[id].id == -1 || (op2::g_units[id].flags & op2::UNIT_DEAD)) break;
+                    op2::unitListSort();
+                    const std::vector<uint32_t> com = quadro({}), sem = quadro({id});
+                    ml = 1 << 30; mt = 1 << 30; mr = -1; mb = -1;
+                    for (int y = 0; y < vh; ++y)
+                        for (int x = 0; x < vw; ++x)
+                            if (com[(size_t)y * vw + x] != sem[(size_t)y * vw + x]) {
+                                ml = std::min(ml, x); mr = std::max(mr, x); mt = std::min(mt, y); mb = std::max(mb, y);
+                            }
+                    if (mr - ml > 8 && mb - mt > 8) { des = id; break; }
+                }
+                gs.onIdle(renderer, 0.2501f / 4.0f);
+            }
+            if (!des && op2::g_units[id].id != -1) op2::g_units[id].flags |= op2::UNIT_DEAD;
+        }
+        std::printf("[Ordem] desastre usado: %s (Y=%d), desenha em vista (%d,%d)-(%d,%d)\n", des ? nome : "nenhum",
+                    des ? op2::unitOY(op2::g_units[des]) : 0, ml, mt, mr, mb);
+        casos.push_back({"um desastre desenha num quadro parado (premissa)", des ? 1 : 0, 1});
+        if (des) {
+            // O efeito no meio do desenho do desastre, mas com Y MAIOR que o dele.
+            const int ex = camX + (ml + mr) / 2;
+            const int ey = std::max(camY + (mt + mb) / 2, op2::unitOY(op2::g_units[des]) + 4);
+            const int e = op2::createAmbientAnim(ex, ey, 598, 1000, 0);
+            casos.push_back({"o efeito tem Y maior que o desastre (premissa)",
+                             op2::unitOY(op2::g_units[e]) > op2::unitOY(op2::g_units[des]) ? 1 : 0, 1});
+            const Frente f = quemNaFrente(e, des);
+            std::printf("[Ordem] desastre x efeito: sobreposicao %d, efeito na frente %d, desastre na frente %d\n",
+                        f.sobreposicao, f.a, f.b);
+            casos.push_back({"desastre: os dois se sobrepoem (premissa)", f.sobreposicao > 20 ? 1 : 0, 1});
+            casos.push_back({"o desastre (0x200) fica na frente do efeito", f.b > 0 ? 1 : 0, 1});
+            casos.push_back({"... sempre", f.a, 0});
+            op2::g_units[e].flags |= op2::UNIT_DEAD;
+            op2::g_units[des].flags |= op2::UNIT_DEAD;
+        }
+    }
+
+    // 2) veiculo DENTRO da linha de baixo -- a doca de uma fundicao: Y maior
+    //    que o centro do predio, entao o caminhao fica na frente. (O sprite de
+    //    um predio nao desce abaixo do footprint: um veiculo na linha logo
+    //    abaixo nem encosta nele. A doca e o caso que importa.)
+    {
+        tira(predio.id());
+        const int fund = op2::placeBuilding(0x36, bx, by, 0);
+        int dx = 0, dy = 0;
+        op2::dockCell(fund, dx, dy);
+        op2::Unit v;
+        op2::TethysGame::CreateUnit(v, op2::mapCargoTruck, op2::LOCATION{dx, dy + 3}, 0);
+        op2::UnitRecord& r = op2::g_units[v.id()];
+        op2::g_gameMap.clearUnitOccupancy(r.pixelX >> 5, r.pixelY >> 5);
+        r.pixelX = dx << 5; r.pixelY = dy << 5;
+        op2::g_gameMap.setUnitOccupancy(dx, dy, v.id());
+        const Frente f = quemNaFrente(fund, v.id());
+        std::printf("[Ordem] veiculo ao sul: sobreposicao %d, predio na frente %d, veiculo na frente %d\n",
+                    f.sobreposicao, f.a, f.b);
+        casos.push_back({"sul: os dois se sobrepoem (premissa)", f.sobreposicao > 20 ? 1 : 0, 1});
+        casos.push_back({"sul: o VEICULO fica na frente", f.b > 0 ? 1 : 0, 1});
+        casos.push_back({"... e o predio nao o cobre", f.a, 0});
+        tira(v.id());
+    }
+    int ruins = 0;
+    for (const Caso& c : casos) {
+        const bool ok = c.obtido == c.esperado;
+        if (!ok) ++ruins;
+        std::printf("[Ordem] %-52s %lld (esperado %lld) %s\n", c.nome.c_str(), c.obtido, c.esperado,
+                    ok ? "ok" : "FALHOU");
+    }
+    std::printf("[Ordem] %d casos, %d falhas\n", (int)casos.size(), ruins);
+    renderer.shutdown();
+    SDL_Quit();
+    return ruins ? 1 : 0;
+}
+
 // --artcliptest: o RECORTE POR PEDACO do sub_403E00. Os bits 5..9 do type de
 // uma imagem sao um indice k; se k != 0, o pedaco so e desenhado dentro do
 // retangulo k da animacao. E o que esconde o que "entra" num predio: na doca
@@ -6960,6 +7161,8 @@ int main(int argc, char* argv[]) {
             return runMusicTest(argv[i + 1]);
         if (std::strcmp(argv[i], "--optmenutest") == 0 && i + 1 < argc)
             return runOptMenuTest(argv[i + 1]);
+        if (std::strcmp(argv[i], "--drawordertest") == 0 && i + 1 < argc)
+            return runDrawOrderTest(argv[i + 1], i + 2 < argc ? argv[i + 2] : "");
         if (std::strcmp(argv[i], "--artcliptest") == 0)
             return runArtClipTest();
         if (std::strcmp(argv[i], "--pushtest") == 0 && i + 1 < argc)

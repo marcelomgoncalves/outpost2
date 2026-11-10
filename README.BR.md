@@ -178,7 +178,7 @@ que o original não tem — nível da IA, escuridão da noite, volume, câmera d
 demo, tela cheia, a pele dos menus (`MenuSkin`) e a volta horizontal do mapa
 (`MapWrap`); estão documentadas no `PORT_STATUS.BR.md`.
 
-Há **108 modos de linha de comando** para testes e capturas, entre eles uma
+Há **109 modos de linha de comando** para testes e capturas, entre eles uma
 bateria de regressão (`--savetest` prova o determinismo de salvar/recarregar).
 A lista está no `PORT_STATUS.BR.md`.
 
@@ -212,7 +212,7 @@ e descartado das listas de cheat que circulam por aí.
 
 ```
 src/
-  main.cpp        entrada + os 108 modos de teste/captura
+  main.cpp        entrada + os 109 modos de teste/captura
   app/            TApp, UIState, GameState (o jogo), ShellState, HUD,
                   as 6 abas do quadro, minimapa, globo, diálogos
   game/           a simulação: unidades, estruturas, movimento, pathfinder,
@@ -255,6 +255,11 @@ cursores `.ANI`.
   míssil que ia no inimigo.
 - **O muro não falha mais** por ter perto dele um muro em obra, a praga ou
   lava. Prédio vizinho continua impedindo, como deve.
+- **Veículo atrás de prédio fica atrás do prédio.** O porte desenhava todos os
+  prédios e depois todos os veículos, então um veículo passando ao norte de um
+  prédio alto aparecia por cima dele. Agora a ordem é a do original: prédios e
+  veículos juntos, de cima para baixo no mapa; tiros e explosões por cima; e os
+  desastres (raio, tornado, meteoro) por último.
 - **A carga do caminhão não vaza mais da doca.** Na atracagem, o braço que leva
   o minério para dentro do prédio aparecia descendo por cima do terreno. Os
   sprites do jogo trazem retângulos de recorte por pedaço, que o porte lia mas
