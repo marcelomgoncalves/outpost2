@@ -1022,7 +1022,8 @@ void GameState::onIdle(Renderer& renderer, float dt) {
     // original renderer, under every unit body). The pads of the buildings whose
     // art carries none: Agridome sub_401970 (0x87E/0x87F/0x880 by state), both
     // Storage Tanks sub_409590 / sub_409840 (0x881/0x882/0x883), and the mines
-    // -- Common/Rare Ore Mine and Magma Well share sub_44B280 (0x747, frame 0).
+    // -- Common/Rare Ore Mine and Magma Well share sub_44B280 (0x747, frame 0)
+    // -- and the Garage floor (Garage::DrawGroundLayer, by table and state).
     // Drawn at the unit's position like the body, except while dying (0x2F) or
     // being built (0x21).
     setArtShadows(m_stationaryShadows);
@@ -1055,6 +1056,17 @@ void GameState::onIdle(Renderer& renderer, float dt) {
         if (r.type == 0x27) raw = byState(0x87E);                                   // Agridome
         else if (r.type == 0x19 || r.type == 0x1A) raw = byState(0x881);            // Storage Tanks
         else if (r.type == 0x15 || r.type == 0x16 || r.type == 0x2A) raw = 0x747;    // mines
+        else if (r.type == 0x29) {                                                  // Garage
+            // Garage::DrawGroundLayer (0x0041CFB0): the floor under the whole
+            // garage, by state (0, 1, 2; nothing for the other states). Unit
+            // flag 0x1000 -- the same table the body art comes from
+            // (structure.cpp isEdenTable) -- picks 0x85A/0x85C/0x85F,
+            // otherwise 0x214/0x216/0x218.
+            const int ow = r.owner & 0x0F;
+            const bool tableA = ow < kMaxPlayers && g_playerData[ow].isEden != 0;
+            static const int kFloor[2][3] = {{0x214, 0x216, 0x218}, {0x85A, 0x85C, 0x85F}};
+            raw = (st >= 0 && st <= 2) ? kFloor[tableA ? 1 : 0][st] : 0;
+        }
         if (!raw || !g_art.ok() || raw - 0x65 >= g_art.numAnimations()) continue;
         const int ow = r.owner & 0x0F;
         const int pc = (ow < kMaxPlayers) ? g_playerData[ow].colorNumber : 0;

@@ -232,6 +232,16 @@ PBMP tilesets, the `op2_art` sprites, the data sheets and the `.ANI` cursors.
 
 ## Recent changes
 
+### 2026-11-10
+
+- **The Garage floor is drawn**, as in the original's
+  `Garage::DrawGroundLayer`: the Plymouth garage's grey pad with the yellow
+  arrows, and the dark floor with lights inside the Eden garage (until now
+  the ground showed through). One animation per state (0x214/0x216/0x218 or
+  0x85A/0x85C/0x85F, from the same table as the garage body), drawn in the
+  ground layer under the units like the other building pads.
+- `--missiontest` lists each building's state and animation.
+
 ### 2026-11-08
 
 - **The map view stops at the edges**, as in the original: only "around the

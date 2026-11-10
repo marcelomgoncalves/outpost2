@@ -3049,8 +3049,11 @@ static int runMissionTest(const std::string& dll, const std::string& outPath, in
     for (size_t i = 1; i < op2::g_units.size(); ++i) {
         const op2::UnitRecord& r = op2::g_units[i];
         if (r.id == -1) continue;
-        std::printf("[MissionTest] %2d tipo 0x%02X dono %d tile (%d,%d)\n", r.id, r.type, r.owner & 0x0F,
+        std::printf("[MissionTest] %2d tipo 0x%02X dono %d tile (%d,%d)", r.id, r.type, r.owner & 0x0F,
                     op2::unitOX(r) >> 5, op2::unitOY(r) >> 5);
+        if (r.flags & op2::UNIT_BUILDING)
+            std::printf(" estado %d anim %d", static_cast<int>((r.state34 >> 16) & 0xFFFF), op2::structureCurAnim(r));
+        std::printf("\n");
     }
     std::string lastMsg;
     for (int k = 0; k < ticks; ++k) {
