@@ -178,7 +178,7 @@ que o original não tem — nível da IA, escuridão da noite, volume, câmera d
 demo, tela cheia, a pele dos menus (`MenuSkin`) e a volta horizontal do mapa
 (`MapWrap`); estão documentadas no `PORT_STATUS.BR.md`.
 
-Há **105 modos de linha de comando** para testes e capturas, entre eles uma
+Há **106 modos de linha de comando** para testes e capturas, entre eles uma
 bateria de regressão (`--savetest` prova o determinismo de salvar/recarregar).
 A lista está no `PORT_STATUS.BR.md`.
 
@@ -212,7 +212,7 @@ e descartado das listas de cheat que circulam por aí.
 
 ```
 src/
-  main.cpp        entrada + os 105 modos de teste/captura
+  main.cpp        entrada + os 106 modos de teste/captura
   app/            TApp, UIState, GameState (o jogo), ShellState, HUD,
                   as 6 abas do quadro, minimapa, globo, diálogos
   game/           a simulação: unidades, estruturas, movimento, pathfinder,
@@ -234,6 +234,22 @@ cursores `.ANI`.
 ---
 
 ## Mudanças recentes
+
+### 2026-11-10
+
+- **As unidades não passam mais por cima umas das outras nem dividem um
+  tile.** O veículo que vai dar um passo para um tile com outra unidade agora
+  faz o que o `StartNextTileStep` do original faz: nunca entra. Se a outra
+  unidade pode ser empurrada (um veículo aliado parado ou esperando), ela é
+  chamada a sair para o vizinho mais barato (`BumpBlockingUnit`; um waypoint
+  de desvio se ela estiver indo a algum lugar) e quem ia passar espera, até 20
+  tentativas; depois recalcula a rota. Antes, o pathfinder planeja através de
+  aliados em movimento e o passo tomava o tile mesmo assim, e os grupos se
+  empilhavam nos mesmos tiles.
+- Novo modo de teste `--stacktest <DLL> [saida.bmp]`: leva todos os veículos
+  do jogador local de um lado para o outro, cruzando uns pelos outros, e
+  falha se dois chegarem a ocupar o mesmo tile (t13 e t14: 0 ticks; o t14
+  tinha 1679 antes da correção).
 
 ### 2026-11-08
 

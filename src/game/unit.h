@@ -174,6 +174,11 @@ struct UnitRecord {
     uint16_t fracX = 0, fracY = 0; // [st+0x44]/[st+0x46] fração 16 bits da posição
     int      turnTicks = 0;        // [st+0x68] ticks de giro restantes
     int8_t   turnStep = 0;         // [st+0x60] giro por tick (com sinal)
+    // [st+0x6C] bump retries: a step into a tile held by a bumpable unit waits
+    // and retries up to 20 times (Unit::Vehicle::StartNextTileStep). Zeroed when
+    // a step completes. One byte, in what was padding, so sizeof (and the save
+    // layout signature) is unchanged.
+    uint8_t  bumpRetries = 0;
     int      stepDestX = 0, stepDestY = 0;  // [st+0x48]/[st+0x4C] pixel do destino
 
     // --- Combate (src/game/weapon.cpp) ---------------------------------------

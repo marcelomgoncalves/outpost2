@@ -4,6 +4,7 @@
 #include <cstring>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <vector>
 #include <algorithm>
 #include <set>
@@ -5818,6 +5819,96 @@ static int runMoveCap(const std::string& mapName, const std::string& prefix) {
     return 0;
 }
 
+// --stacktest <DLL> [out.bmp]: two vehicles must never hold the same tile.
+// Selects every vehicle of the local player and right-clicks them (the real
+// UI path) to a tile 8 tiles east, then back to where the first one started,
+// and again to the first spot: the groups cross each other and pile up at the
+// destinations. Every tick each live vehicle's tile (the tile it is stepping
+// onto, while it moves) is checked against the others. PASSED = no tick with
+// two vehicles on one tile. With out.bmp the last frame is saved.
+static int runStackTest(const std::string& dll, const std::string& outBmp) {
+    if (SDL_Init(SDL_INIT_VIDEO) != 0) return 1;
+    op2::g_ResManager.init(".");
+    op2::g_art.load();
+    op2::Renderer renderer;
+    if (!renderer.init("OP2 stacktest", 1280, 960, false)) { SDL_Quit(); return 1; }
+    op2::GameState gs;
+    if (!gs.loadMission(dll)) { std::printf("[Stack] missao falhou\n"); renderer.shutdown(); SDL_Quit(); return 2; }
+    gs.onActivate();
+    gs.onIdle(renderer, 0.0f);
+    const int me = op2::TethysGame::localPlayer();
+    std::vector<int> veh;
+    for (size_t i = 1; i < op2::g_units.size(); ++i) {
+        const op2::UnitRecord& r = op2::g_units[i];
+        if (r.id == -1 || (r.owner & 0x0F) != me || !(r.flags & op2::UNIT_VEHICLE) || (r.flags & op2::UNIT_DEAD)) continue;
+        veh.push_back(static_cast<int>(i));
+    }
+    if (veh.size() < 2) { std::printf("[Stack] menos de 2 veiculos\n"); renderer.shutdown(); SDL_Quit(); return 3; }
+    auto tileOf = [](int id, int& x, int& y) {
+        const op2::UnitRecord& r = op2::g_units[id];
+        if (r.velX || r.velY) { x = r.stepDestX >> 5; y = r.stepDestY >> 5; }   // claimed tile
+        else { x = r.pixelX >> 5; y = r.pixelY >> 5; }
+    };
+    auto rightClick = [&](int px, int py) {
+        gs.setCamera(std::max(0, px - 300), std::max(0, py - 300));
+        gs.onIdle(renderer, 0.0f);
+        SDL_Event ev{};
+        ev.type = SDL_MOUSEBUTTONDOWN;
+        ev.button.button = SDL_BUTTON_RIGHT;
+        ev.button.x = op2::GameState::kViewX + (px - gs.camX());
+        ev.button.y = op2::GameState::kViewY + (py - gs.camY());
+        gs.handleEvent(renderer, ev);
+    };
+    int clashTicks = 0, worst = 0;
+    auto check = [&](int tick) {
+        std::map<std::pair<int, int>, std::vector<int>> at;
+        for (int id : veh) {
+            const op2::UnitRecord& r = op2::g_units[id];
+            if (r.id == -1 || (r.flags & op2::UNIT_DEAD)) continue;
+            int x, y; tileOf(id, x, y);
+            at[{x, y}].push_back(id);
+        }
+        int n = 0;
+        for (auto& kv : at) if (kv.second.size() > 1) {
+            ++n;
+            if (clashTicks < 5)
+                std::printf("[Stack] tick %d: tile (%d,%d) tem %d veiculos (ex. %d e %d)\n", tick, kv.first.first,
+                            kv.first.second, static_cast<int>(kv.second.size()), kv.second[0], kv.second[1]);
+        }
+        if (n) { ++clashTicks; worst = std::max(worst, n); }
+    };
+    auto idle = [&]() {
+        int moving = 0;
+        for (int id : veh) { const op2::UnitRecord& r = op2::g_units[id]; if (r.id != -1 && (r.field22 == 1 || r.hasOrder)) ++moving; }
+        return moving;
+    };
+    int t = 0;
+    auto run = [&](int ticks) {
+        for (int k = 0; k < ticks; ++k) { gs.onIdle(renderer, 0.2501f / 4.0f); check(t++); if (k > 50 && k % 50 == 0 && !idle()) break; }
+    };
+    int sx, sy; tileOf(veh[0], sx, sy);
+    const int legs[3][2] = {{sx + 8, sy}, {sx, sy}, {sx + 8, sy}};
+    std::printf("[Stack] %d veiculos do jogador %d; ida e volta entre (%d,%d) e (%d,%d)\n",
+                static_cast<int>(veh.size()), me, sx, sy, sx + 8, sy);
+    for (const auto& L : legs) {
+        gs.setSelection(veh);
+        rightClick(L[0] * 32 + 16, L[1] * 32 + 16);
+        run(3000);
+        std::printf("[Stack] perna para (%d,%d): ate tick %d, ainda andando=%d\n", L[0], L[1], t, idle());
+    }
+    if (!outBmp.empty()) {
+        gs.setCamera(std::max(0, (sx + 4) * 32 - 600), std::max(0, sy * 32 - 400));
+        gs.onIdle(renderer, 0.0f);
+        writeBmp32(outBmp, renderer.getFramebuffer(), renderer.getWidth(), renderer.getHeight());
+    }
+    const bool ok = clashTicks == 0;
+    std::printf("[Stack] ticks com 2+ veiculos no mesmo tile: %d (pior: %d tiles) -> %s\n", clashTicks, worst,
+                ok ? "PASSOU" : "FALHOU");
+    renderer.shutdown();
+    SDL_Quit();
+    return ok ? 0 : 4;
+}
+
 // --colltest <map>: verifica colisao com terreno impassavel (pathfinder + passo).
 static int runCollTest(const std::string& mapName) {
     if (!op2::g_ResManager.init(".")) return 2;
@@ -6265,6 +6356,8 @@ int main(int argc, char* argv[]) {
             return runMoveLog(argv[i + 1]);
         if (std::strcmp(argv[i], "--movecap") == 0 && i + 2 < argc)
             return runMoveCap(argv[i + 1], argv[i + 2]);
+        if (std::strcmp(argv[i], "--stacktest") == 0 && i + 1 < argc)
+            return runStackTest(argv[i + 1], i + 2 < argc && argv[i + 2][0] != '-' ? argv[i + 2] : "");
         if (std::strcmp(argv[i], "--colltest") == 0 && i + 1 < argc)
             return runCollTest(argv[i + 1]);
         if (std::strcmp(argv[i], "--artdump") == 0 && i + 2 < argc)

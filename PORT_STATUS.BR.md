@@ -48,7 +48,7 @@ com o registro de `src/mission/op2_api.cpp`.
 
 ```
 src/
-  main.cpp        entrada + os 105 modos de teste/captura
+  main.cpp        entrada + os 106 modos de teste/captura
   app/            TApp, UIState, GameState (o jogo), ShellState, HUD,
                   as 6 abas do quadro, minimapa, globo, diálogos
   game/           a simulação: unidades, estruturas, movimento, pathfinder,
@@ -1882,7 +1882,7 @@ missão e os recursos originais do diretório de trabalho).
 
 ### Testes por linha de comando
 
-São 105 modos. Os que cobrem regressão de verdade:
+São 106 modos. Os que cobrem regressão de verdade:
 
 | Modo | O que prova |
 |---|---|
@@ -1895,6 +1895,7 @@ São 105 modos. Os que cobrem regressão de verdade:
 | `--transfertest <DLL>` | o TRANSFER: escolhedor, desistência e a troca de dono |
 | `--idletest <DLL>` | o aviso de perder metal ao desligar armazém/fundição, nos dois lados da fronteira |
 | `--garagecounttest <DLL>` | os seis pontos em que um veículo guardado em garagem tem de contar |
+| `--stacktest <DLL> [saida.bmp]` | dois veículos nunca ocupam o mesmo tile: todos os veículos do lado vão e voltam com o clique direito, cruzando uns pelos outros |
 | `--alerttest <DLL>` | a unidade atacada alerta os vizinhos armados do próprio lado (`sub_44DE10`) |
 | `--deletetest <DLL>` | grupo de IA com prazo vencido: autodestruição e, 400 ticks depois, sair do mapa |
 | `--cheattest <DLL>` | os cheats do chat: os quatro hashes do executável e o efeito de cada um |

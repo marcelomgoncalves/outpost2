@@ -176,7 +176,7 @@ The game's `OUTPOST2.INI` file is respected. The port adds seven keys the
 original doesn't have — AI level, night darkness, volume, demo camera and
 fullscreen; they are documented in `PORT_STATUS.EN.md`.
 
-There are **105 command-line modes** for tests and captures, among them a
+There are **106 command-line modes** for tests and captures, among them a
 regression battery (`--savetest` proves save/reload determinism). The list is
 in `PORT_STATUS.EN.md`.
 
@@ -210,7 +210,7 @@ and what was checked and discarded from the cheat lists that circulate.
 
 ```
 src/
-  main.cpp        entry point + the 105 test/capture modes
+  main.cpp        entry point + the 106 test/capture modes
   app/            TApp, UIState, GameState (the game), ShellState, HUD,
                   the frame's 6 tabs, minimap, globe, dialogs
   game/           the simulation: units, structures, movement, pathfinder,
@@ -231,6 +231,21 @@ PBMP tilesets, the `op2_art` sprites, the data sheets and the `.ANI` cursors.
 ---
 
 ## Recent changes
+
+### 2026-11-10
+
+- **Units no longer drive over each other or share a tile.** A vehicle about
+  to step onto a tile that holds another unit now does what the original's
+  `StartNextTileStep` does: it never enters. If the other unit can be bumped
+  (a friendly vehicle that is idle or waiting), it is asked to move aside to
+  its cheapest neighbour tile (`BumpBlockingUnit`; a detour waypoint if it is
+  on its way somewhere) and the stepping unit waits, up to 20 retries; then
+  it replans. Before, the pathfinder plans through moving friendly units and
+  the step took the tile anyway, so groups piled up on the same tiles.
+- New test mode `--stacktest <DLL> [out.bmp]`: moves every vehicle of the
+  local player back and forth through each other and fails if two ever hold
+  the same tile (t13 and t14: 0 ticks; t14 had 1679
+  before the fix).
 
 ### 2026-11-08
 

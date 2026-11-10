@@ -71,6 +71,60 @@ void wallBlockTarget(UnitRecord& u, int nx, int ny) {
     u.field4E = static_cast<int16_t>(ny);
 }
 
+// Unit::Vehicle::InsertDetourWaypoint (0x0044C0E0): puts a waypoint before the
+// current one so a unit that is on its way somewhere first steps aside, then
+// carries on with its order. Only one detour at a time (move flag 2).
+static void insertDetour(UnitRecord& o, int x, int y) {
+    OrderBlock& ob = o.order;
+    if (!o.hasOrder || ob.waypoints.empty() || (ob.flags & 2)) return;
+    if (ob.curWaypoint > ob.countMinus1) ob.curWaypoint = ob.countMinus1;
+    if (ob.curWaypoint < 0) ob.curWaypoint = 0;
+    ob.flags |= 2;
+    ob.waypoints.insert(ob.waypoints.begin() + ob.curWaypoint, packLocation(x, y));
+    ++ob.count; ++ob.countMinus1;
+    o.clearRoute();
+}
+
+// Unit::Vehicle::BumpBlockingUnit (0x0044BCB0; sub_44BBA0 in this build): the
+// unit `id`, stepping in direction `dir`, finds `occ` on the tile and asks it to
+// move aside. Only an idle unit, or a moving one that is stopped and has no
+// step left or whose next step comes back at us, is asked. It moves to its
+// cheapest neighbour tile (not back toward us; the bumper's next step costs
+// 1.5x): a detour waypoint if it has an order, otherwise a plain move.
+static void bumpBlockingUnit(int id, int dir, int occ) {
+    if (occ <= 0 || occ >= static_cast<int>(g_units.size())) return;
+    UnitRecord& o = g_units[occ];
+    if (o.id == -1 || (o.flags & UNIT_DEAD) || !(o.flags & UNIT_VEHICLE)) return;
+    const int back = (dir + 4) & 7;
+    const bool ordered = o.hasOrder && o.field20 == 1 && !o.order.waypoints.empty();
+    if (o.field22 == 1) {
+        if (o.velX || o.velY || o.stepTicks > 0 || o.turnTicks) return;
+        if (o.routeIdx < static_cast<int>(o.routeDirs.size()) &&
+            (o.routeDirs[o.routeIdx] & 7) != back) return;
+    } else if (o.field22 != 0) {
+        return;
+    }
+    if (!ordered && o.action != 0) return;       // busy with something that isn't a move
+
+    const UnitRecord& u = g_units[id];
+    const int next = u.routeIdx + 1 < static_cast<int>(u.routeDirs.size())
+                         ? (u.routeDirs[u.routeIdx + 1] & 7) : -1;
+    const StepChoice c = pfChooseStep(occ, dir, next);
+    if (!c.found) return;
+    if (ordered) { insertDetour(o, c.x, c.y); return; }
+    // Idle: PathfindTo the tile (vtbl+0x7C) and start moving.
+    o.action = CMD_MOVE;
+    o.field20 = 1;
+    o.field3C = 0;
+    o.hasOrder = true;
+    o.order = OrderBlock{};
+    o.order.count = 1;
+    o.order.countMinus1 = 0;
+    o.order.waypoints.assign(1, packLocation(c.x, c.y));
+    o.order.flags |= 1;
+    o.clearRoute();
+}
+
 // Monta o passo na direção `dir` — sub_44B650. Retorna false se o passo não
 // pode ser dado (a rota é descartada e recalculada).
 static bool setupStep(int id, int dir) {
@@ -107,8 +161,27 @@ static bool setupStep(int id, int dir) {
         u.turnStep = 0; u.turnTicks = 0;
     }
 
-    // Célula de destino: ocupada por outra unidade → o original desvia
-    // (sub_44BD60/sub_44BBA0); aqui a rota é recalculada pelo pathfinder.
+    // Another unit on the destination tile: never step onto it (the original
+    // tests 0xAFFF0000 -- occupant or wall bits -- before anything else). A
+    // unit that can be bumped is asked to move aside and we wait, up to 20
+    // retries; anything else ends the route and the dispatcher replans.
+    // The pathfinder still plans through moving friendly units (x2/x4 cost),
+    // which is why this check has to be here and not only in pfCanEnter.
+    {
+        const uint32_t cell = g_gameMap.rawCell(nx, ny);
+        const int occ = static_cast<int>((cell & GameMap::CELL_OCCUPANCY) >> GameMap::CELL_OCC_SHIFT);
+        if (occ != 0 && occ != id && !(cell & GameMap::CELL_WALLBITS)) {
+            if (pfOccupantPassable(occ, id)) {               // Unit.CanBeBumpedBy
+                bumpBlockingUnit(id, dir, occ);
+                if (u.bumpRetries++ < 20) {
+                    u.velX = u.velY = 0;
+                    u.stepTicks = 0;
+                    return true;                             // wait on this tile
+                }
+            }
+            return false;
+        }
+    }
     pfSetContext(id);
     if (!pfCanEnter(nx, ny)) {
         wallBlockTarget(u, nx, ny);    // parede no caminho: a IA atira nela
@@ -192,6 +265,7 @@ static bool waypointAdvance(UnitRecord& u) {
         const int d = std::max(std::abs(dx) >> 5, std::abs(dy) >> 5);
         if (d > static_cast<int>(wp >> 29)) break;
         ++ob.curWaypoint;
+        ob.flags &= ~2u;                         // a detour waypoint is passed
         advanced = true;
     }
     return advanced;
@@ -215,6 +289,7 @@ static void stepUnit(int id) {
         ++u.routeIdx;
         u.pixelX = u.stepDestX; u.pixelY = u.stepDestY;
         u.velX = u.velY = 0;
+        u.bumpRetries = 0;
     }
 
     // Ações de movimento: 2 (mover), 0x26 (ficar parado: anda até o ponto e
@@ -275,7 +350,7 @@ static void stepUnit(int id) {
             const int n = static_cast<int>(u.routeDirs.size());
             if (n == 0) {
                 // loc_44C16D: sem rota p/ um ponto intermediário → o próximo.
-                if (ob.curWaypoint < ob.countMinus1 && guard < 64) { ++ob.curWaypoint; u.clearRoute(); continue; }   // sub_44C2F0
+                if (ob.curWaypoint < ob.countMinus1 && guard < 64) { ++ob.curWaypoint; ob.flags &= ~2u; u.clearRoute(); continue; }   // sub_44C2F0
                 // sub_4401F0: as vizinhas enteráveis passam pela função de custo
                 // (objetivo = negativo) — uma vizinha-objetivo vira o próximo passo.
                 {
