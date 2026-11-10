@@ -48,7 +48,7 @@ com o registro de `src/mission/op2_api.cpp`.
 
 ```
 src/
-  main.cpp        entrada + os 105 modos de teste/captura
+  main.cpp        entrada + os 106 modos de teste/captura
   app/            TApp, UIState, GameState (o jogo), ShellState, HUD,
                   as 6 abas do quadro, minimapa, globo, diálogos
   game/           a simulação: unidades, estruturas, movimento, pathfinder,
@@ -1861,6 +1861,128 @@ tecla valendo antes do primeiro tique **18 / 0**.
 
 ---
 
+## 5.23. Rota de minério automática (2026-11-10) — **acréscimo deste porte**
+
+Isto **não existe no original**. É o sexto extra do porte, ao lado de
+`AILevel`, `NightDarkness`, `AudioVolume`, `DemoCamera` e `Fullscreen`, e como
+eles mora numa chave do `OUTPOST2.INI`:
+
+```ini
+[Game]
+AutoOreRoute=1      ; 1 (padrão) = o atalho; 0 = só o comando de três cliques
+```
+
+### O que faz
+
+Com **caminhões de carga vazios** selecionados, o **clique direito na doca de
+uma mina** monta a rota inteira: escolhe a fundição e manda o ciclo. Vale para
+as três fontes de mineral e para as duas raças. O comando original de três
+cliques (`S&et an ore-hauling route`) continua ali, inteiro, com a chave
+ligada ou desligada.
+
+### Por que custou pouco
+
+O clique direito numa doca **já mandava o caminhão atracar**: esse caminho
+passa pelo `uiCommandTarget(UC_MOVE, …)`, que reconhece a doca e troca o
+"mover" pelo pacote de atracagem. Faltava só, ali, mandar o pacote **`0x27`**
+em vez do de doca. `dockCell`, o casamento mina↔fundição do `oreRouteTarget` e
+o `sendOreRoute` já estavam prontos.
+
+E nada muda no motor: a rota montada é **o mesmo pacote `0x27`** dos três
+cliques, com os mesmos três pontos (mina, fundição, mina). Lockstep de rede,
+jogo salvo e determinismo ficam como estavam.
+
+### A escolha da fundição — `nearestSmelterFor`
+
+É a peça nova de verdade. Varre os prédios **do mesmo dono** e filtra pelo
+tipo que casa com a mina — o casamento vem **antes** da distância:
+
+| Mina | Fundição |
+|---|---|
+| `0x15` comum | `0x36` `SMELTER` |
+| `0x16` rara | `0x38` `SMELTER_ADV` |
+| `0x2A` Magma Well | `0x38` `SMELTER_ADV` |
+
+Entre as compatíveis, duas camadas:
+
+1. a mais próxima **disponível no momento** — operando **e** com espaço no
+   estoque. É exatamente a condição do `truckDockStatus` para o caminhão
+   **não** ficar esperando na doca (`structureOperational(f) &&
+   smelterCanAccept(f, 1)`), então o atalho escolhe onde ele vai conseguir
+   descarregar;
+2. se nenhuma estiver disponível, a mais próxima de todas: a rota ainda é
+   montada e o caminhão espera nela, como no comando de três cliques.
+
+A distância é medida **entre as docas** (é por onde o caminhão entra), com o
+wrap em X.
+
+> **Minério bruto só descarrega em fundição.** O `vehicleCanDock` diz que o
+> Storage Tanks (`0x19`/`0x1A`) aceita só **metal já fundido** (cargas 4 e 5);
+> minério bruto (2 e 3) só entra no `0x36`/`0x38`. Por isso "o depósito que
+> aceita o minério" é, no jogo, a fundição.
+
+### As duas raças
+
+`SMELTER` e `SMELTER_ADV` têm `Owner = B` na planilha: são os mesmos prédios
+para Eden e Plymouth. O que muda é a **doca** — a planilha traz duas colunas,
+`dockLocE` e `dockLocP`, e na fundição de minério raro elas são **diferentes**
+(`4` e `1`). Quem resolve é o `dockCell`, que já escolhe a coluna pela raça do
+dono.
+
+### Quando o atalho desiste
+
+Sem caminhão de carga vazio na seleção, ou com o clique fora da **doca** de uma
+mina do jogador, ou sem nenhuma fundição compatível viva, o atalho devolve
+`false` e o clique volta a ser o de sempre — o caminhão vai, atraca e carrega.
+
+### O teste — `--autoroutetest <mapa>`
+
+36 casos, em dois cenários.
+
+**Eden, minério comum.** Uma mina e quatro fundições: uma comum perto (ligada
+ao CC), uma de minério **raro** ainda mais perto, uma comum longe e uma do
+**vizinho** mais perto que todas. Mede: a escolhida é a comum perto; a
+**disponível** ganha da mais próxima parada; com **duas** disponíveis ganha a
+mais próxima; sem nenhuma disponível — inclusive com o estoque cheio — fica a
+mais próxima de todas; a do vizinho é pulada, **também no recuo**. O clique
+direito entra pelo `handleEvent`, com um `SDL_MOUSEBUTTONDOWN` de verdade
+posicionado pelo `nativeToScreen`; fora da doca (no **outro** tile da mina,
+que é 2×1) ele não monta rota. E o ciclo roda 4000 tiques: **10 cargas, 4754
+de minério no estoque**, caminhão visto cheio e vazio — é o que separa
+"atracou e carregou" de "está em ciclo".
+
+**Plymouth, minério raro e Magma Well.** Beacon raro → mina `0x16`;
+respiradouro → Magma Well `0x2A`; os dois vão para a fundição de raro, mesmo
+com uma comum mais perto; a doca da fundição de raro **muda com a raça**; e o
+ciclo do raro roda: **4 cargas, 0 → 1020** de minério raro.
+
+Neutralizando, uma peça de cada vez: tipo ignorado **15**; a mais longe na
+camada das disponíveis **1**; o clique direito sem o desvio **9**; a chave do
+INI ignorada **1**; caminhão cheio aceito **1**; fundição morta contando **1**;
+o dono ignorado **1**; qualquer tile da mina **1**; a disponibilidade ignorada
+**1**; "disponível" sem o teste de espaço **1**; sem o de operando **1**; sem o
+recuo **3**.
+
+### O que o teste ensinou (e nenhum era defeito do código)
+
+- **Região reaproveitada.** O segundo cenário caía na mesma região do primeiro,
+  e a doca da fundição de Plymouth (coluna 1) ficava sobre uma célula que o
+  primeiro tinha marcado. O caminhão parava colado na doca. Agora a busca da
+  área começa abaixo do primeiro cenário.
+- **Fome.** O segundo cenário roda depois de milhares de tiques do primeiro,
+  sem Agridome: os trabalhadores morriam, a fundição parava, e o caminhão
+  esperava na doca — comportamento **certo**, só que medindo a economia e não
+  a rota. O teste alimenta a colônia.
+- **Estoque no teto.** Nos mapas de escaramuça o jogador começa com o estoque
+  cheio — de novo o caso em que o caminhão espera. O teste zera o estoque.
+- **Uma bateria que mentia.** Cada rodada leva perto de 4 minutos; com o
+  limite em 280 s, o `timeout` matava o processo antes da lista de casos, e o
+  `grep -c FALHOU` contava **zero** — lido como "a mutação escapou". A
+  mutação do clique direito parecia sobreviver e, rodada à mão, derrubava 9
+  casos. A bateria agora acusa **"sem resultado"** quando a lista não sai.
+
+---
+
 ## 6. Build e execução
 
 **Toolchain:** CMake >= 3.15 + MSVC, C++17, SDL2 2.30.9 (em `third_party/`).
@@ -1882,7 +2004,7 @@ missão e os recursos originais do diretório de trabalho).
 
 ### Testes por linha de comando
 
-São 105 modos. Os que cobrem regressão de verdade:
+São 106 modos. Os que cobrem regressão de verdade:
 
 | Modo | O que prova |
 |---|---|
@@ -1902,6 +2024,7 @@ São 105 modos. Os que cobrem regressão de verdade:
 | `--optmenutest <DLL>` | a aba Options: os botões do PREFERENCES, o rádio do modo de tela e a tela de fim de missão inteira |
 | `--bannertest <DLL> [bmp]` | o letreiro de fim de missão: cor, tamanho, contorno e centragem, medidos no quadro desenhado |
 | `--pausetest <DLL> [bmp]` | a pausa do `Ctrl+P`: o relógio para, o som suspende, o letreiro aparece, e em rede nada disso |
+| `--autoroutetest <mapa>` | a rota de minério automática: a fundição disponível mais próxima, as três minas, as duas raças, e o ciclo rodando |
 | `--missiontest <DLL> <saida> <ticks>` | carrega e roda qualquer missão |
 | `--aitest <DLL campanha> <DLL multi>` | o `AILevel` chega ao jogador 0 e o multijogador fica intacto |
 | `--helptest [tópico]` | o leitor do `.HLP` e a navegação da tela do manual |

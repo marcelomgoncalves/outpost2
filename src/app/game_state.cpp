@@ -88,6 +88,7 @@ void GameState::loadSettings() {
     soundSetMasterVolume(gs.audioVolume);              // "AudioVolume" (idem)
     m_demoCam = gs.demoCamera != 0;                    // "DemoCamera" (idem)
     m_mapWrapAll = gs.mapWrap != 0;                    // "MapWrap" (fork)
+    m_autoOreRoute = gs.autoOreRoute != 0;             // "AutoOreRoute" (so deste porte)
     // "Fullscreen" NAO entra aqui: a janela nao pode pular de modo a cada
     // loadSettings (o Alt+Enter troca a tela sem gravar o INI, e o valor do
     // arquivo estaria velho). Quem aplica e o APPLY, por applyScreenMode.
@@ -1790,6 +1791,40 @@ int GameState::unitAtView(int vx, int vy) const {
     return unitAtBox(vx, vy, /*meusApenas*/ false);
 }
 
+// --autoroutetest: o clique DIREITO num tile, pela porta do handleEvent.
+void GameState::debugRightClickTile(Renderer& r, int tileX, int tileY) {
+    setCamera(tileX * 32 - viewportW() / 2, tileY * 32 - viewportH() / 2);
+    onIdle(r, 0.0f);                           // a camera e presa aos limites aqui
+    const int vx = tileX * 32 + 16 - m_camX, vy = tileY * 32 + 16 - m_camY;
+    int sx = 0, sy = 0;
+    r.nativeToScreen(vx + kViewX, vy + kViewY, sx, sy);
+    SDL_Event ev{};
+    ev.type = SDL_MOUSEBUTTONDOWN;
+    ev.button.button = SDL_BUTTON_RIGHT;
+    ev.button.clicks = 1;
+    ev.button.x = sx; ev.button.y = sy;
+    handleEvent(r, ev);
+}
+
+// Ver a declaracao: o atalho da rota de minerio, que nao existe no original.
+bool GameState::autoRouteClick(int tileX, int tileY) {
+    if (!m_autoOreRoute || m_selected.empty()) return false;
+    const int me = TethysGame::localPlayer();
+    const int b = buildingAtTile(tileX, tileY, me);
+    if (!b) return false;
+    const int t = g_units[b].type;
+    if (t != 0x15 && t != 0x16 && t != 0x2A) return false;      // nao e mina
+    int dx, dy;
+    if (!dockCell(b, dx, dy) || dx != tileX || dy != tileY) return false;   // tem de ser a doca
+    if (!autoOreRoute(m_selected, b)) {
+        // Mina certa, mas sem fundicao compativel (ou sem caminhao vazio): o
+        // clique volta a ser o de sempre, e o caminhao vai atracar e carregar.
+        return false;
+    }
+    soundPlay(0x56);                                            // o som do comando aceito
+    return true;
+}
+
 // As cinco passadas do sub_4085C0 sobre a vista, com a fonte do sub_4084D0:
 // o texto em PRETO nos quatro cantos diagonais de +-2 px -- o contorno -- e
 // depois em VERMELHO (o COLORREF 0xFF) no lugar certo. O retangulo do original
@@ -2203,7 +2238,7 @@ void GameState::handleEvent(Renderer& renderer, const SDL_Event& e) {
             int tileX = (m_camX + vx) / 32, tileY = (m_camY + vy) / 32;
             if (g_gameMap.ok()) tileX &= (g_gameMap.width() - 1);
             uiSetCursorPixel(g_gameMap.ok() ? (m_camX + vx) & (g_gameMap.width() * 32 - 1) : m_camX + vx, m_camY + vy);
-            uiCommandTarget(UC_MOVE, m_selected, tileX, tileY);
+            if (!autoRouteClick(tileX, tileY)) uiCommandTarget(UC_MOVE, m_selected, tileX, tileY);
         }
     }
     if (e.type == SDL_MOUSEBUTTONUP && e.button.button == SDL_BUTTON_LEFT && m_miniDrag) {

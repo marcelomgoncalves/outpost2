@@ -606,6 +606,76 @@ int oreRouteTarget(int stage, int mineId, int truckOwner, int tileX, int tileY) 
     return b == mineId ? b : 0;
 }
 
+// ---- Rota automatica (acrescimo deste porte) ---------------------------------
+// A fundicao compativel mais proxima: comum (0x36) para a mina comum (0x15),
+// de minerio raro (0x38) para a mina rara (0x16) e para o Magma Well (0x2A) --
+// o mesmo casamento que o oreRouteTarget exige no segundo clique. A distancia
+// e medida entre as DOCAS, que e por onde o caminhao entra, e o eixo X da a
+// volta no mapa como tudo o mais.
+//
+// Entre as compativeis, ganha a mais proxima DISPONIVEL NO MOMENTO -- operando
+// e com espaco no estoque. E exatamente a condicao do truckDockStatus para o
+// caminhao NAO ficar esperando na doca, entao o atalho escolhe onde ele vai
+// conseguir descarregar. So quando nenhuma esta disponivel e que vale a mais
+// proxima de todas: a rota ainda e montada, e o caminhao espera nela, como no
+// comando de tres cliques. (Minerio BRUTO so descarrega em fundicao: o
+// Storage Tanks guarda metal ja fundido -- ver vehicleCanDock.)
+int nearestSmelterFor(int mineId) {
+    if (!valid(mineId)) return 0;
+    const UnitRecord& m = g_units[mineId];
+    const int mt = m.type;
+    if (mt != 0x15 && mt != 0x16 && mt != 0x2A) return 0;
+    const int querido = mt == 0x15 ? 0x36 : 0x38;
+    int mx, my;
+    if (!dockCell(mineId, mx, my)) return 0;
+    const int dono = ownerOf(m);
+    const int largura = g_gameMap.ok() ? g_gameMap.width() : 0;
+    int melhor = 0, melhorDisp = 0;
+    long long melhorD = 0, melhorDispD = 0;
+    for (int i = 1; i < static_cast<int>(g_units.size()); ++i) {
+        const UnitRecord& b = g_units[i];
+        if (b.id == -1 || (b.flags & UNIT_DEAD) || !(b.flags & UNIT_BUILDING)) continue;
+        if (b.type != querido || ownerOf(b) != dono) continue;
+        int sx, sy;
+        if (!dockCell(i, sx, sy)) continue;
+        int dx = sx - mx;
+        if (largura) {                                  // o menor dos dois lados
+            dx = ((dx % largura) + largura) % largura;
+            if (dx > largura / 2) dx -= largura;
+        }
+        const long long dy = sy - my;
+        const long long d = static_cast<long long>(dx) * dx + dy * dy;
+        if (!melhor || d < melhorD) { melhor = i; melhorD = d; }
+        // A condicao do truckDockStatus para descarregar sem esperar.
+        const bool disponivel = structureOperational(b) && smelterCanAccept(i, 1);
+        if (disponivel && (!melhorDisp || d < melhorDispD)) { melhorDisp = i; melhorDispD = d; }
+    }
+    return melhorDisp ? melhorDisp : melhor;
+}
+
+bool autoOreRoute(const std::vector<int>& sel, int mineId) {
+    if (!valid(mineId)) return false;
+    const int me = TethysGame::localPlayer();
+    if (ownerOf(g_units[mineId]) != me) return false;
+    // So caminhoes de carga VAZIOS, como o proprio comando de rota exige
+    // (sub_453E80): com carga a bordo o primeiro trecho nao faria sentido.
+    std::vector<int> caminhoes;
+    for (int id : sel)
+        if (valid(id) && g_units[id].type == mapCargoTruck && g_units[id].cargo == 0 &&
+            ownerOf(g_units[id]) == me)
+            caminhoes.push_back(id);
+    if (caminhoes.empty()) return false;
+    const int smelter = nearestSmelterFor(mineId);
+    if (!smelter) return false;
+    int mx, my, sx, sy;
+    if (!dockCell(mineId, mx, my) || !dockCell(smelter, sx, sy)) return false;
+    // Os mesmos tres pontos dos tres cliques: mina, fundicao, mina.
+    const std::vector<uint32_t> pts = {packLocation(mx, my), packLocation(sx, sy),
+                                       packLocation(mx, my)};
+    sendOreRoute(caminhoes, pts, 0, 1, mineId, smelter);
+    return true;
+}
+
 void sendOreRoute(const std::vector<int>& sel, const std::vector<uint32_t>& pts,
                   int mineIdx, int smelterIdx, int mineId, int smelterId) {
     CommandPacket pkt;

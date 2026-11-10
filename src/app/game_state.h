@@ -170,6 +170,7 @@ private:
     bool uiStateLoad(const std::vector<uint8_t>& blob);
     int m_endPhase = 0;
     int m_pauseCount = 0;          // TFrame+0x1E0: as pausas empilhadas
+    bool m_autoOreRoute = true;    // "AutoOreRoute" (so deste porte)
     uint32_t m_endWaitStart = 0;
     void beginGameEnd();
     void finishGameEnd();
@@ -360,6 +361,10 @@ public:
     // --pausetest: a pausa por dentro. O Ctrl+P so ALTERNA, entao e por aqui
     // que se empilham as pausas, como o jogo faz noutras situacoes.
     void debugPauseGame(bool on) { pauseGame(on); }
+    // --autoroutetest: o clique DIREITO num tile, pela porta do handleEvent.
+    // A camera vai antes para o tile, senao o clique cai fora da vista.
+    void debugRightClickTile(Renderer& r, int tileX, int tileY);
+    void debugAutoOreRoute(bool on) { m_autoOreRoute = on; }
     // --bannertest: a vista em coordenadas de TELA, para o teste saber onde o
     // letreiro deveria estar centrado.
     void debugViewRect(int& x, int& y, int& w, int& h) const {
@@ -514,6 +519,13 @@ private:
     // proprio jogo ("Are you sure you want to abort the mission?") e pelo mesmo
     // caminho do "&BACK TO MAIN MENU" da tela END MISSION.
     void escapePressed();
+    // ACRESCIMO DESTE PORTE (chave "AutoOreRoute"): o clique DIREITO na doca de
+    // uma mina, com caminhoes de carga vazios selecionados, monta a rota de
+    // minerio inteira -- a fundicao compativel mais proxima e o mesmo pacote
+    // 0x27 dos tres cliques. true = a rota foi mandada e o clique acabou aqui;
+    // false = segue o caminho de sempre (mover / atracar). O comando de tres
+    // cliques continua existindo, com ou sem a chave.
+    bool autoRouteClick(int tileX, int tileY);
     // A pausa do Ctrl+P. `pauseGame` e o sub_49BFE0: um CONTADOR ([+0x1E0]),
     // porque o jogo se pausa sozinho em outras situacoes alem da tecla; so a
     // subida de 0 para 1 e a descida para 0 e que agem. `togglePause` e o

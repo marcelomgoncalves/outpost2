@@ -109,6 +109,14 @@ struct GameSettings {
     // main menu on the right); 1 = the original OP2 dialog skin (blueprint
     // background, red frames, green text -- see DialogSkin).
     int menuSkin = 0;
+    // "AutoOreRoute": acrescimo DESTE porte, nao existe no original. 1 = o
+    // clique DIREITO na doca de uma mina, com caminhoes de carga vazios
+    // selecionados, monta a rota inteira sozinho: escolhe a fundicao
+    // compativel mais proxima e manda o mesmo pacote 0x27 dos tres cliques.
+    // 0 = o clique direito so manda atracar, como no original. O comando de
+    // tres cliques (S&et an ore-hauling route) continua existindo nos dois
+    // casos. Ver op2::autoOreRoute.
+    int autoOreRoute = 1;
     // Fork: "MapWrap". 0 = like the original: the map view stops at the map's
     // left/right edges; only "around the world" maps (512 tiles wide) wrap.
     // 1 = every map wraps horizontally (the port's old behaviour).

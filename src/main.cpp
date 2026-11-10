@@ -4349,6 +4349,366 @@ static int runBannerTest(const std::string& dll, const std::string& shot) {
     return ruins ? 1 : 0;
 }
 
+// --autoroutetest <mapa>: o atalho da rota de minerio (acrescimo deste porte,
+// chave "AutoOreRoute"). Monta uma colonia com uma mina comum e TRES
+// fundicoes -- uma comum longe, uma comum perto e uma de minerio raro ainda
+// mais perto -- e confere que o clique direito na doca da mina escolhe a
+// comum PERTO, e que o ciclo que ele monta e o mesmo dos tres cliques.
+static int runAutoRouteTest(const std::string& mapName) {
+    if (SDL_Init(SDL_INIT_VIDEO) != 0) return 1;
+    op2::g_ResManager.init(".");
+    op2::g_art.load();
+    op2::Renderer renderer;
+    if (!renderer.init("OP2 autoroutetest", 1280, 960, false)) { SDL_Quit(); return 1; }
+    op2::GameState gs;
+    if (!gs.load(mapName)) { renderer.shutdown(); SDL_Quit(); return 2; }
+    gs.onActivate();
+    op2::resetUnits();
+
+    // Uma faixa livre e larga o bastante para tudo. O segundo cenario procura
+    // OUTRA: o resetUnits apaga as unidades, mas as celulas do primeiro
+    // continuam marcadas (o footprint vira cellType 0x1A), e a doca da
+    // fundicao de Plymouth cai justamente numa delas. Como o que foi
+    // construido deixou de ser passavel, a propria busca ja desvia.
+    const int W = op2::g_gameMap.width(), H = op2::g_gameMap.height();
+    const auto acharArea = [&](int& ax, int& ay, int yMin) {
+        ax = ay = -1;
+        for (int y = yMin; y < H - 16 && ax < 0; ++y)
+            for (int x = 3; x < W - 44 && ax < 0; ++x) {
+                bool ok = true;
+                for (int dy = -1; dy <= 14 && ok; ++dy)
+                    for (int dx = -2; dx <= 40 && ok; ++dx)
+                        if (!op2::g_gameMap.isPassable(op2::LOCATION{x + dx, y + dy})) ok = false;
+                if (ok) { ax = x; ay = y; }
+            }
+    };
+    int bx = -1, by = -1;
+    acharArea(bx, by, 3);
+    if (bx < 0) { std::printf("[AutoRoute] sem area livre\n"); return 3; }
+
+    // A mina, direto pelo beacon (o Robo-Miner levaria milhares de tiques).
+    const int mineX = bx + 30, mineY = by + 7;
+    op2::createBeacon(0x51, mineX, mineY, 0, 0, 0);            // comum, alto, variante 1
+    const int mine = op2::placeBuilding(0x15, mineX, mineY, 0);
+    if (!mine) { std::printf("[AutoRoute] a mina nao subiu\n"); return 4; }
+
+    // A base fica PERTO da mina: a fundicao escolhida tem de operar, e para
+    // isso precisa de energia e da rede -- encostada no Command Center, como
+    // no --oretest. Sem isso o caminhao carrega e fica esperando na doca, e o
+    // ciclo nunca anda (que e o comportamento certo com a fundicao parada).
+    op2::Unit cc, tok;
+    op2::TethysGame::CreateUnit(cc, op2::mapCommandCenter, op2::LOCATION{mineX - 10, mineY}, 0);
+    op2::TethysGame::CreateUnit(tok, op2::mapTokamak, op2::LOCATION{mineX - 7, mineY}, 0);
+    op2::g_playerData[0].workers = 60;
+    op2::g_playerData[0].scientists = 20;
+    op2::colonyMarkDirty(0);
+
+    // Tres fundicoes: a comum PERTO (encostada no CC, a que deve ganhar), uma
+    // de minerio RARO ainda mais perto da mina (para o TIPO vir antes da
+    // distancia) e uma comum LONGE, no outro canto da area livre.
+    const int perto = op2::placeBuilding(0x36, mineX - 10, mineY + 2, 0);
+    const int raro  = op2::placeBuilding(0x38, mineX - 5, mineY + 3, 0);
+    const int longe = op2::placeBuilding(0x36, bx + 1, by + 2, 0);
+    if (!longe || !raro || !perto) { std::printf("[AutoRoute] faltou fundicao\n"); return 5; }
+    for (int t = 0; t < 120; ++t) gs.onIdle(renderer, 0.2501f / 4.0f);
+    std::printf("[AutoRoute] operando: perto=%d raro=%d longe=%d | energia %d/%d\n",
+                (int)op2::structureOperational(op2::g_units[perto]),
+                (int)op2::structureOperational(op2::g_units[raro]),
+                (int)op2::structureOperational(op2::g_units[longe]),
+                op2::g_colony[0].powerGenerated, op2::g_colony[0].powerRequired);
+
+    struct Caso { std::string nome; long long obtido; long long esperado; };
+    std::vector<Caso> casos;
+    const auto d2 = [](int ax, int ay, int bx2, int by2) {
+        const long long dx = ax - bx2, dy = ay - by2; return dx * dx + dy * dy;
+    };
+
+    int mdx, mdy, pdx, pdy, ldx, ldy, rdx, rdy;
+    op2::dockCell(mine, mdx, mdy);
+    op2::dockCell(perto, pdx, pdy);
+    op2::dockCell(longe, ldx, ldy);
+    op2::dockCell(raro, rdx, rdy);
+    std::printf("[AutoRoute] mina (%d,%d) | perto (%d,%d) | longe (%d,%d) | raro (%d,%d)\n",
+                mdx, mdy, pdx, pdy, ldx, ldy, rdx, rdy);
+
+    // A escolha: a comum mais proxima, e NAO a de minerio raro que esta ainda
+    // mais perto -- o casamento de tipo vem antes da distancia.
+    casos.push_back({"a de raro esta mais perto que a comum (premissa)",
+                     d2(rdx, rdy, mdx, mdy) < d2(pdx, pdy, mdx, mdy) ? 1 : 0, 1});
+    casos.push_back({"a comum longe esta mesmo mais longe (premissa)",
+                     d2(ldx, ldy, mdx, mdy) > d2(pdx, pdy, mdx, mdy) ? 1 : 0, 1});
+    casos.push_back({"escolhe a fundicao COMPATIVEL mais proxima",
+                     op2::nearestSmelterFor(mine) == perto ? 1 : 0, 1});
+    casos.push_back({"a escolhida esta operando (premissa do ciclo)",
+                     op2::structureOperational(op2::g_units[perto]) ? 1 : 0, 1});
+    // DISPONIVEL NO MOMENTO vence a mais proxima. A 'perto' e derrubada com
+    // dano (3/4 do HP, que e quando a estrutura para de operar -- condicao de
+    // jogo de verdade) e a 'longe', que esta fora da rede, recebe as tres
+    // marcas de recurso so pelo instante da escolha: o que se mede aqui e a
+    // REGRA de escolha, e ela le exatamente essas marcas.
+    {
+        op2::UnitRecord& pr = op2::g_units[perto];
+        op2::UnitRecord& lg = op2::g_units[longe];
+        const int danoP = pr.damage;
+        const uint32_t flagsL = lg.flags;
+        pr.damage = op2::structureMaxHP(pr);                      // derrubada
+        const uint32_t recursos = op2::UNIT_POWERED | op2::UNIT_WORKERS | op2::UNIT_SCIENTISTS;
+        lg.flags |= recursos;                                     // 'longe' operando
+        casos.push_back({"a perto parada e a longe operando (premissa)",
+                         (!op2::structureOperational(pr) && op2::structureOperational(lg)) ? 1 : 0, 1});
+        casos.push_back({"a DISPONIVEL ganha da mais proxima parada",
+                         op2::nearestSmelterFor(mine) == longe ? 1 : 0, 1});
+        // As duas disponiveis: ai a distancia decide, e ganha a 'perto'.
+        pr.damage = danoP;
+        casos.push_back({"duas disponiveis: ganha a mais proxima",
+                         op2::nearestSmelterFor(mine) == perto ? 1 : 0, 1});
+        pr.damage = op2::structureMaxHP(pr);                      // derrubada de novo
+        // Nenhuma disponivel: a rota ainda sai, para a mais proxima de todas.
+        lg.flags = flagsL;
+        casos.push_back({"nenhuma disponivel: fica a mais proxima de todas",
+                         op2::nearestSmelterFor(mine) == perto ? 1 : 0, 1});
+        // Cheia tambem nao e disponivel: com o estoque no teto, nenhuma aceita.
+        // A 'perto' continua PARADA e a 'longe' OPERANDO: so a regra inteira
+        // (operando E com espaco) chega na mais proxima de todas -- uma que
+        // olhasse so o 'operando' ficaria com a 'longe'.
+        const int ore = op2::g_playerData[0].ore;
+        op2::g_playerData[0].ore = op2::g_colony[0].oreCapacity;
+        lg.flags |= recursos;
+        casos.push_back({"estoque cheio: nenhuma aceita (premissa)",
+                         op2::smelterCanAccept(longe, 1) ? 1 : 0, 0});
+        casos.push_back({"... e a escolha cai na mais proxima",
+                         op2::nearestSmelterFor(mine) == perto ? 1 : 0, 1});
+        lg.flags = flagsL;
+        op2::g_playerData[0].ore = ore;
+        pr.damage = danoP;
+    }
+
+    // Fundicao do VIZINHO, ainda mais perto: nao serve, o caminhao nao
+    // descarregaria nela.
+    {
+        const int alheia = op2::placeBuilding(0x36, mineX - 4, mineY - 3, 1);
+        int ax, ay;
+        casos.push_back({"a fundicao do vizinho esta mais perto (premissa)",
+                         (alheia && op2::dockCell(alheia, ax, ay) &&
+                          d2(ax, ay, mdx, mdy) < d2(pdx, pdy, mdx, mdy)) ? 1 : 0, 1});
+        casos.push_back({"... e mesmo assim nao e escolhida",
+                         op2::nearestSmelterFor(mine) == perto ? 1 : 0, 1});
+        // Tambem no RECUO: com a nossa 'perto' parada nao sobra nenhuma nossa
+        // disponivel, e quem decide e a camada da mais proxima de todas -- que
+        // tem de continuar pulando a do vizinho. (A do vizinho nao esta
+        // disponivel, entao so este caso enxerga um recuo que esquecesse o dono.)
+        {
+            op2::UnitRecord& pr2 = op2::g_units[perto];
+            const int dano2 = pr2.damage;
+            pr2.damage = op2::structureMaxHP(pr2);
+            casos.push_back({"no recuo, a do vizinho tambem e pulada",
+                             op2::nearestSmelterFor(mine) == perto ? 1 : 0, 1});
+            pr2.damage = dano2;
+        }
+        if (alheia) op2::g_units[alheia].flags |= op2::UNIT_DEAD;
+    }
+
+    // O caminhao, e o clique direito na doca da mina.
+    op2::Unit truck;
+    op2::TethysGame::CreateUnit(truck, op2::mapCargoTruck, op2::LOCATION{mineX - 3, mineY + 2}, 0);
+    const op2::UnitRecord& tr = op2::g_units[truck.id()];
+    gs.setSelection({truck.id()});
+    gs.debugRightClickTile(renderer, mdx, mdy);
+    for (int t = 0; t < 8; ++t) gs.onIdle(renderer, 0.2501f / 4.0f);
+    casos.push_back({"o clique direito monta a rota (acao 0x27)", tr.action, 0x27});
+    casos.push_back({"... com os tres pontos", (long long)tr.order.waypoints.size(), 3});
+    casos.push_back({"... apontando para a mina", tr.routeMine, mine});
+    casos.push_back({"... e para a fundicao perto", tr.routeSmelter, perto});
+    {
+        // Fora da doca, o clique direito volta a ser o de sempre -- a mesma
+        // regra do comando de tres cliques (sub_454290). O clique tem de cair
+        // na PEGADA da mina (ela e 2x1), so que no tile que nao e a doca:
+        // num tile que nem e dela, qualquer versao recusaria e o caso nao
+        // mediria nada.
+        const int outro = op2::buildingAtTile(mdx - 1, mdy, 0) == mine ? mdx - 1 : mdx + 1;
+        casos.push_back({"o outro tile e mesmo da mina (premissa)",
+                         op2::buildingAtTile(outro, mdy, 0) == mine ? 1 : 0, 1});
+        op2::Unit t4;
+        op2::TethysGame::CreateUnit(t4, op2::mapCargoTruck, op2::LOCATION{mineX - 2, mineY + 2}, 0);
+        gs.setSelection({t4.id()});
+        gs.debugRightClickTile(renderer, outro, mdy);
+        for (int t = 0; t < 8; ++t) gs.onIdle(renderer, 0.2501f / 4.0f);
+        casos.push_back({"clique fora da doca nao monta rota",
+                         op2::g_units[t4.id()].action == 0x27 ? 1 : 0, 0});
+        op2::g_units[t4.id()].flags |= op2::UNIT_DEAD;
+        gs.setSelection({truck.id()});
+    }
+
+    // E o ciclo roda: a mina entrega cargas e o estoque sobe.
+    // O jogador comeca com o estoque NO TETO nos mapas de escaramuca, e
+    // fundicao cheia e justamente o caso em que o caminhao fica esperando na
+    // doca -- o ciclo nao andaria e o caso nao mediria nada.
+    op2::g_playerData[0].ore = 0;
+    std::printf("[AutoRoute] capacidade de minerio comum: %d\n", op2::g_colony[0].oreCapacity);
+    const int cargas0 = op2::g_units[mine].mineLink;
+    const int ore0 = op2::g_playerData[0].ore;
+    int viuCarregado = 0, viuVazio = 0;
+    for (int t = 0; t < 4000; ++t) {
+        gs.onIdle(renderer, 0.2501f / 4.0f);
+        if (tr.cargo != 0) ++viuCarregado; else ++viuVazio;
+    }
+    const int cargas = op2::g_units[mine].mineLink - cargas0;
+    std::printf("[AutoRoute] %d cargas tiradas, estoque %d -> %d, carregado em %d de 4000 tiques\n",
+                cargas, ore0, op2::g_playerData[0].ore, viuCarregado);
+    casos.push_back({"a mina entregou mais de uma carga (e um CICLO)", cargas >= 2 ? 1 : 0, 1});
+    casos.push_back({"... e o minerio entrou no estoque",
+                     op2::g_playerData[0].ore > ore0 ? 1 : 0, 1});
+    casos.push_back({"... com o caminhao indo e voltando (viu cheio e vazio)",
+                     (viuCarregado > 0 && viuVazio > 0) ? 1 : 0, 1});
+
+    // Com a chave desligada, o clique direito volta a ser o de sempre.
+    {
+        op2::Unit t2;
+        op2::TethysGame::CreateUnit(t2, op2::mapCargoTruck, op2::LOCATION{mineX - 3, mineY + 3}, 0);
+        gs.setSelection({t2.id()});
+        gs.debugAutoOreRoute(false);
+        gs.debugRightClickTile(renderer, mdx, mdy);
+        for (int t = 0; t < 8; ++t) gs.onIdle(renderer, 0.2501f / 4.0f);
+        casos.push_back({"com AutoOreRoute=0 o clique direito nao monta rota",
+                         op2::g_units[t2.id()].action == 0x27 ? 1 : 0, 0});
+        gs.debugAutoOreRoute(true);
+    }
+
+    // Caminhao CHEIO nao serve: o atalho recusa e o clique segue o caminho normal.
+    {
+        op2::Unit t3;
+        op2::TethysGame::CreateUnit(t3, op2::mapCargoTruck, op2::LOCATION{mineX - 4, mineY + 3}, 0);
+        op2::g_units[t3.id()].cargo = static_cast<uint16_t>((100 << 4) | 2);   // minerio comum
+        casos.push_back({"caminhao cheio nao entra no atalho",
+                         op2::autoOreRoute({t3.id()}, mine) ? 1 : 0, 0});
+    }
+
+    // Sem fundicao compativel nao ha o que montar: uma mina RARA aqui nao tem
+    // par, porque a unica de minerio raro... existe. Entao o contrario: tira a
+    // de raro e pergunta por uma mina rara imaginaria -- mais simples, mede-se
+    // a funcao com a fundicao derrubada.
+    {
+        op2::g_units[perto].flags |= op2::UNIT_DEAD;
+        op2::g_units[longe].flags |= op2::UNIT_DEAD;
+        casos.push_back({"sem fundicao comum viva, nao escolhe a de raro",
+                         op2::nearestSmelterFor(mine), 0});
+        op2::g_units[perto].flags &= ~op2::UNIT_DEAD;
+        op2::g_units[longe].flags &= ~op2::UNIT_DEAD;
+        casos.push_back({"de volta, escolhe a perto outra vez",
+                         op2::nearestSmelterFor(mine) == perto ? 1 : 0, 1});
+    }
+
+    // ================= as outras duas minas, e a outra raca =================
+    // O atalho tem de servir a TODO transporte de mineral: minerio comum,
+    // minerio raro e o Magma Well -- e nas duas racas. A doca nao esta no
+    // mesmo lado para as duas: a coluna da planilha e `dockLocE` para Eden e
+    // `dockLocP` para Plymouth, e na fundicao de minerio raro (SMELTER_ADV)
+    // elas sao DIFERENTES (4 e 1). Quem resolve isso e o dockCell, mas ate
+    // aqui nada media.
+    {
+        op2::resetUnits();
+        int cx2 = -1, cy2 = -1;
+        acharArea(cx2, cy2, by + 20);                         // abaixo do 1o cenario
+        if (cx2 < 0) { std::printf("[AutoRoute] sem segunda area livre\n"); return 7; }
+        std::printf("[AutoRoute] 2o cenario em (%d,%d); o 1o foi em (%d,%d)\n", cx2, cy2, bx, by);
+        op2::g_playerData[0].isEden = 0;                      // colonia de Plymouth
+        op2::g_playerData[0].workers = 60;
+        op2::g_playerData[0].scientists = 20;
+        // Comida: este cenario roda depois de milhares de tiques do primeiro,
+        // sem Agridome nenhuma. Sem isto a colonia passa fome, os trabalhadores
+        // morrem, a fundicao PARA -- e o caminhao fica esperando na doca, que e
+        // o comportamento certo, mas mede a economia e nao a rota.
+        op2::g_playerData[0].foodStored = 100000;
+        op2::g_playerData[0].ore = 0;
+        op2::g_playerData[0].rareOre = 0;
+
+        const int rx = cx2 + 30, ry = cy2 + 7;
+        op2::createBeacon(0x51, rx, ry, 1, 0, 0);             // beacon RARO
+        const int minaRara = op2::placeBuilding(0x15, rx, ry, 0);
+        op2::createBeacon(0x52, rx - 16, ry + 5, -1, -1, -1);  // respiradouro de magma
+        const int magma = op2::placeBuilding(0x15, rx - 16, ry + 5, 0);
+
+        op2::Unit cc2, tok2;
+        op2::TethysGame::CreateUnit(cc2, op2::mapCommandCenter, op2::LOCATION{rx - 10, ry}, 0);
+        op2::TethysGame::CreateUnit(tok2, op2::mapTokamak, op2::LOCATION{rx - 7, ry}, 0);
+        op2::colonyMarkDirty(0);
+        // A de minerio raro encostada no CC; uma COMUM ainda mais perto da
+        // mina, que nao pode ser escolhida.
+        const int fRaro  = op2::placeBuilding(0x38, rx - 10, ry + 2, 0);
+        const int fComum = op2::placeBuilding(0x36, rx - 5, ry + 3, 0);
+        if (!minaRara || !magma || !fRaro || !fComum) {
+            std::printf("[AutoRoute] cenario 2 incompleto (%d %d %d %d)\n",
+                        minaRara, magma, fRaro, fComum);
+            return 6;
+        }
+        for (int t = 0; t < 120; ++t) gs.onIdle(renderer, 0.2501f / 4.0f);
+
+        casos.push_back({"o beacon raro deu uma mina RARA (0x16)",
+                         op2::g_units[minaRara].type, 0x16});
+        casos.push_back({"o respiradouro deu um Magma Well (0x2A)",
+                         op2::g_units[magma].type, 0x2A});
+        casos.push_back({"a fundicao de raro esta operando (premissa)",
+                         op2::structureOperational(op2::g_units[fRaro]) ? 1 : 0, 1});
+
+        int qdx, qdy, cdx, cdy;
+        op2::dockCell(minaRara, qdx, qdy);
+        op2::dockCell(fComum, cdx, cdy);
+        int fx, fy;
+        op2::dockCell(fRaro, fx, fy);
+        casos.push_back({"a comum esta mais perto da mina rara (premissa)",
+                         d2(cdx, cdy, qdx, qdy) < d2(fx, fy, qdx, qdy) ? 1 : 0, 1});
+        casos.push_back({"mina RARA escolhe a fundicao de minerio raro",
+                         op2::nearestSmelterFor(minaRara) == fRaro ? 1 : 0, 1});
+        casos.push_back({"Magma Well tambem vai para a de minerio raro",
+                         op2::nearestSmelterFor(magma) == fRaro ? 1 : 0, 1});
+
+        // A doca da fundicao de raro muda de lado conforme a raca: se alguem
+        // trocar o dockCell por "sempre a coluna de Eden", isto pega.
+        op2::g_playerData[0].isEden = 1;
+        int ex, ey;
+        op2::dockCell(fRaro, ex, ey);
+        op2::g_playerData[0].isEden = 0;
+        std::printf("[AutoRoute] doca da fundicao de raro: Plymouth (%d,%d), Eden (%d,%d)\n",
+                    fx, fy, ex, ey);
+        casos.push_back({"a doca da fundicao de raro muda com a raca", ex != fx ? 1 : 0, 1});
+
+        // E o ciclo da mina rara anda, com a doca de Plymouth.
+        op2::Unit t5;
+        op2::TethysGame::CreateUnit(t5, op2::mapCargoTruck, op2::LOCATION{rx - 3, ry + 2}, 0);
+        gs.setSelection({t5.id()});
+        gs.debugRightClickTile(renderer, qdx, qdy);
+        for (int t = 0; t < 8; ++t) gs.onIdle(renderer, 0.2501f / 4.0f);
+        const op2::UnitRecord& tr5 = op2::g_units[t5.id()];
+        casos.push_back({"o clique direito monta a rota da mina rara", tr5.action, 0x27});
+        casos.push_back({"... apontando para a fundicao de raro", tr5.routeSmelter, fRaro});
+        const int raro0 = op2::g_playerData[0].rareOre;
+        const int cargas0r = op2::g_units[minaRara].mineLink;
+        int cheio5 = 0;
+        for (int t = 0; t < 3000; ++t) {
+            gs.onIdle(renderer, 0.2501f / 4.0f);
+            if (tr5.cargo != 0) ++cheio5;
+        }
+        std::printf("[AutoRoute] mina rara: caminhao cheio em %d de 3000 tiques\n", cheio5);
+        std::printf("[AutoRoute] mina rara: %d cargas, raro %d -> %d\n",
+                    op2::g_units[minaRara].mineLink - cargas0r, raro0,
+                    op2::g_playerData[0].rareOre);
+        casos.push_back({"o ciclo do minerio raro roda em Plymouth",
+                         op2::g_playerData[0].rareOre > raro0 ? 1 : 0, 1});
+    }
+
+    int ruins = 0;
+    for (const Caso& c : casos) {
+        const bool ok = c.obtido == c.esperado;
+        if (!ok) ++ruins;
+        std::printf("[AutoRoute] %-52s %lld (esperado %lld) %s\n", c.nome.c_str(), c.obtido,
+                    c.esperado, ok ? "ok" : "FALHOU");
+    }
+    std::printf("[AutoRoute] %d casos, %d falhas\n", (int)casos.size(), ruins);
+    renderer.shutdown();
+    SDL_Quit();
+    return ruins ? 1 : 0;
+}
+
 // --pausetest <DLL>: o Ctrl+P (comando 40001 do acelerador 130). O porte nao
 // tinha pausa nenhuma: a tecla nao fazia nada e o letreiro "Game Paused" do
 // controle TFrame+0x1F4 nunca aparecia.
@@ -6192,6 +6552,8 @@ int main(int argc, char* argv[]) {
             return runMusicTest(argv[i + 1]);
         if (std::strcmp(argv[i], "--optmenutest") == 0 && i + 1 < argc)
             return runOptMenuTest(argv[i + 1]);
+        if (std::strcmp(argv[i], "--autoroutetest") == 0 && i + 1 < argc)
+            return runAutoRouteTest(argv[i + 1]);
         if (std::strcmp(argv[i], "--pausetest") == 0 && i + 1 < argc)
             return runPauseTest(argv[i + 1], i + 2 < argc ? argv[i + 2] : "");
         if (std::strcmp(argv[i], "--bannertest") == 0 && i + 1 < argc)

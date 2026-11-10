@@ -84,6 +84,13 @@ public:
 
     // Map screen coordinate to native 640x480 coordinate
     void screenToNative(int screenX, int screenY, int& nativeX, int& nativeY) const;
+    // O caminho inverso, para os testes poderem posicionar um clique de
+    // verdade: dado o ponto no quadro, onde ele cai na JANELA.
+    void nativeToScreen(int nativeX, int nativeY, int& screenX, int& screenY) const {
+        if (m_w <= 0 || m_h <= 0) { screenX = screenY = 0; return; }
+        screenX = m_viewportRect.x + (nativeX + m_inputOffX) * m_viewportRect.w / m_w;
+        screenY = m_viewportRect.y + (nativeY + m_inputOffY) * m_viewportRect.h / m_h;
+    }
 
 private:
     SDL_Window* m_window = nullptr;

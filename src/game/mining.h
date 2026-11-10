@@ -64,6 +64,15 @@ void sendOreRoute(const std::vector<int>& sel, const std::vector<uint32_t>& pts,
                   int mineIdx, int smelterIdx, int mineId, int smelterId);
 void oreRouteTick(int truckId);                   // jpt_43B312 case 39
 
+// ACRESCIMO DESTE PORTE (nao existe no original; chave "AutoOreRoute").
+// A rota dos tres cliques, montada sozinha: dada a mina, acha a fundicao
+// COMPATIVEL mais proxima do mesmo dono e manda o mesmo pacote 0x27. Devolve
+// false (e nao manda nada) se a mina nao serve, se nao ha caminhao de carga
+// vazio na selecao ou se nao existe fundicao compativel.
+// `nearestSmelterFor` e a parte nova de verdade: o resto ja era do jogo.
+int  nearestSmelterFor(int mineId);
+bool autoOreRoute(const std::vector<int>& sel, int mineId);
+
 // sub_44DA80: o veículo pode atracar no prédio (com a carga atual)?
 bool vehicleCanDock(int vehicleId, int buildingId, bool ownerCheck);
 // sub_406210: nome da carga do caminhão ("(empty)", "Common Ore"...).

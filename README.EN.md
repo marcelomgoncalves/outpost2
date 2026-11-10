@@ -176,7 +176,7 @@ The game's `OUTPOST2.INI` file is respected. The port adds seven keys the
 original doesn't have — AI level, night darkness, volume, demo camera and
 fullscreen; they are documented in `PORT_STATUS.EN.md`.
 
-There are **105 command-line modes** for tests and captures, among them a
+There are **106 command-line modes** for tests and captures, among them a
 regression battery (`--savetest` proves save/reload determinism). The list is
 in `PORT_STATUS.EN.md`.
 
@@ -210,7 +210,7 @@ and what was checked and discarded from the cheat lists that circulate.
 
 ```
 src/
-  main.cpp        entry point + the 105 test/capture modes
+  main.cpp        entry point + the 106 test/capture modes
   app/            TApp, UIState, GameState (the game), ShellState, HUD,
                   the frame's 6 tabs, minimap, globe, dialogs
   game/           the simulation: units, structures, movement, pathfinder,
@@ -252,6 +252,12 @@ PBMP tilesets, the `op2_art` sprites, the data sheets and the `.ANI` cursors.
   the missile on its way to the enemy.
 - **Walls no longer fail to build** next to a wall under construction, Blight
   or lava. A neighbouring building still blocks, as it should.
+- **One-click ore route** (*an addition of this port; not in the original*):
+  with empty cargo trucks selected, **right-clicking a mine's dock** builds the
+  whole cycle — it picks the nearest compatible smelter **that is running and
+  has room** and off it goes. Works for common ore, rare ore and the Magma
+  Well, for both factions. The three-click command is untouched;
+  `AutoOreRoute=0` in `OUTPOST2.INI` turns the shortcut off.
 - **`Ctrl+P` pauses the game** (and so does the `PAUSE` key, as in the
   original's accelerator table): the clock stops, music and sound go quiet, and
   the *"Game Paused. Press CTRL+P to Resume"* banner comes up. Multiplayer
