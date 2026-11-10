@@ -178,7 +178,7 @@ que o original não tem — nível da IA, escuridão da noite, volume, câmera d
 demo, tela cheia, a pele dos menus (`MenuSkin`) e a volta horizontal do mapa
 (`MapWrap`); estão documentadas no `PORT_STATUS.BR.md`.
 
-Há **106 modos de linha de comando** para testes e capturas, entre eles uma
+Há **107 modos de linha de comando** para testes e capturas, entre eles uma
 bateria de regressão (`--savetest` prova o determinismo de salvar/recarregar).
 A lista está no `PORT_STATUS.BR.md`.
 
@@ -212,7 +212,7 @@ e descartado das listas de cheat que circulam por aí.
 
 ```
 src/
-  main.cpp        entrada + os 106 modos de teste/captura
+  main.cpp        entrada + os 107 modos de teste/captura
   app/            TApp, UIState, GameState (o jogo), ShellState, HUD,
                   as 6 abas do quadro, minimapa, globo, diálogos
   game/           a simulação: unidades, estruturas, movimento, pathfinder,
@@ -255,6 +255,11 @@ cursores `.ANI`.
   míssil que ia no inimigo.
 - **O muro não falha mais** por ter perto dele um muro em obra, a praga ou
   lava. Prédio vizinho continua impedindo, como deve.
+- **O veículo parado sai da frente.** Um caminhão (ou qualquer veículo) parado
+  na doca, ou no caminho, agora é empurrado para uma casa vizinha quando outro
+  precisa passar, como no original. Antes o porte deixava os dois entrarem no
+  mesmo tile. Um veículo ocupado (no meio da própria rota) ou um inimigo armado
+  não são empurrados: quem chega espera um pouco e procura outro caminho.
 - **Rota de minério num clique** (*acréscimo deste porte, não existe no
   original*): com caminhões de carga vazios selecionados, o **clique direito
   na doca de uma mina** monta o ciclo inteiro — ele escolhe a fundição

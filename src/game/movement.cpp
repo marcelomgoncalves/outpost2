@@ -71,6 +71,64 @@ void wallBlockTarget(UnitRecord& u, int nx, int ny) {
     u.field4E = static_cast<int16_t>(ny);
 }
 
+// Trava do empurrao: no original quem e empurrado recebe uma ROTA (vt[0x7C] =
+// sub_44C350, que chama o planejador sub_4401F0) e anda no proprio tique --
+// nunca empurra ninguem de dentro de um empurrao. O porte da o passo na hora
+// (unitStepToward), entao esta trava reproduz isso: quem esta sendo empurrado
+// nao empurra.
+static int s_empurrando = 0;
+
+// sub_44BBA0: pede a `blockerId` que saia da frente de `pusherId`, que tentava
+// andar na direcao `dir` e achou a celula dele ocupada.
+//
+// Escolhe, entre as 7 vizinhas do bloqueador -- todas menos a que volta para
+// quem empurra, (dir + 4) & 7 --, a de menor custo de terreno (sub_438390, com
+// o contexto do BLOQUEADOR), penalizando em 1,5x a direcao do PROXIMO trecho de
+// quem empurra (o `edi` ali e quem empurra: routeDirs[idx+1] dele). Assim o
+// bloqueador nao e mandado para dentro do caminho que vem a seguir.
+//
+// Corrigido em relacao ao original: o custo de celula bloqueada e 0x7FFFFFFF,
+// e `custo * 3 / 2` em 32 bits da a volta para ~0x3FFFFFFE -- uma celula
+// INTRANSITAVEL na direcao penalizada podia ganhar. Aqui bloqueada continua
+// bloqueada.
+//
+// So o ramo do bloqueador PARADO (sub-estado 0) esta portado. Se ele estiver
+// andando ([+0x22] == 1) e vindo de frente, o original insere um ponto de
+// passagem na frente da ordem dele (sub_44BFD0); esse ramo depende de partes
+// do bloco de ordem ainda nao decodificadas (com o indice em 0 a escrita cai
+// em [ordem+0x10]) e fica de fora -- quem empurra espera e, em 20, replaneja.
+static void pushAside(int pusherId, int dir, int blockerId) {
+    if (blockerId <= 0 || blockerId >= static_cast<int>(g_units.size())) return;
+    UnitRecord& b = g_units[blockerId];
+    if (b.id == -1 || (b.flags & UNIT_DEAD)) return;
+    if (b.field22 != 0) return;                  // andando (sub_44BFD0) ou ocupado
+    const UnitRecord& p = g_units[pusherId];
+    const int oposta = (dir + 4) & 7;            // [esp+var_2C]
+    // routeDirs[idx+1] de quem empurra ([ecx+eax+7Dh]), se houver.
+    const int proxima = (p.routeIdx + 1 < static_cast<int>(p.routeDirs.size()))
+                            ? (p.routeDirs[p.routeIdx + 1] & 7) : -1;
+    const int mask = g_gameMap.internalWidth() - 1;   // dword_54EBC4
+    const int H = g_gameMap.height();                 // dword_54EBD0
+    const int cx = b.pixelX >> 5, cy = b.pixelY >> 5;
+    pfPush();                                    // sub_438180
+    pfSetContext(blockerId);                     // sub_438260
+    int melhor = PF_BLOCKED, mx = 0, my = 0;
+    for (int k = 1; k < 8; ++k) {
+        const int d = (oposta + k) & 7;
+        const int nx = (cx + kDir8[d].dx) & mask;
+        const int ny = std::min(std::max(cy + kDir8[d].dy, 0), H - 1);
+        int custo = pfMoveCost(nx, ny);          // sub_438390
+        if (d == proxima && custo != PF_BLOCKED) custo = custo * 3 / 2;
+        if (custo < melhor) { melhor = custo; mx = nx; my = ny; }
+    }
+    pfPop();                                     // sub_438200
+    if (melhor == PF_BLOCKED) return;
+    ++s_empurrando;
+    unitStepToward(blockerId, mx, my);           // vt[0x7C] (sub_44C350)
+    --s_empurrando;
+    b.field22 = 1;                               // incondicional, como no original
+}
+
 // Monta o passo na direção `dir` — sub_44B650. Retorna false se o passo não
 // pode ser dado (a rota é descartada e recalculada).
 static bool setupStep(int id, int dir) {
@@ -107,8 +165,27 @@ static bool setupStep(int id, int dir) {
         u.turnStep = 0; u.turnTicks = 0;
     }
 
-    // Célula de destino: ocupada por outra unidade → o original desvia
-    // (sub_44BD60/sub_44BBA0); aqui a rota é recalculada pelo pathfinder.
+    // Célula de destino ocupada por OUTRA unidade: o original nunca entra
+    // (`test ebx, 0AFFF0000h` -- so anda sem ocupante e sem parede). Com
+    // parede e ocupante, desiste; sem parede, se da para empurrar (sub_44BD60),
+    // empurra (sub_44BBA0) e ESPERA -- velocidade zero, a rota fica, e no tique
+    // seguinte tenta a mesma direcao. Em 20 tentativas ([st+0x6C]) desiste e
+    // replaneja (loc_44B998). O porte usava o pfCanEnter aqui -- que diz se o
+    // PLANEJADOR pode passar -- e entrava na celula ocupada, sobrescrevendo a
+    // ocupacao: dois veiculos no mesmo tile.
+    {
+        const uint32_t dcell = g_gameMap.rawCell(nx, ny);
+        const int occId = static_cast<int>((dcell & GameMap::CELL_OCCUPANCY) >> GameMap::CELL_OCC_SHIFT);
+        if (occId != 0 && occId != id) {
+            if (dcell & GameMap::CELL_WALLBITS) return false;     // loc_44B8F0 -> loc_44B998
+            if (s_empurrando || !pfOccupantPassable(occId, id)) return false;   // loc_44B998
+            pushAside(id, dir, occId);                            // sub_44BBA0
+            if (u.pushWait++ >= 20) return false;                 // loc_44B998
+            u.velX = u.velY = 0;                                  // [st+0x58] = [st+0x5C] = 0
+            u.stepTicks = 1;                                      // um tique parado, e tenta de novo
+            return true;
+        }
+    }
     pfSetContext(id);
     if (!pfCanEnter(nx, ny)) {
         wallBlockTarget(u, nx, ny);    // parede no caminho: a IA atira nela
@@ -215,6 +292,7 @@ static void stepUnit(int id) {
         ++u.routeIdx;
         u.pixelX = u.stepDestX; u.pixelY = u.stepDestY;
         u.velX = u.velY = 0;
+        u.pushWait = 0;                                  // [st+0x6C] = 0 (loc_44C0F1)
     }
 
     // Ações de movimento: 2 (mover), 0x26 (ficar parado: anda até o ponto e
@@ -273,6 +351,7 @@ static void stepUnit(int id) {
         if (u.routeIdx >= static_cast<int>(u.routeDirs.size())) {
             pfPlanRoute(id, curX, curY, destX, destY, mode, dist);
             const int n = static_cast<int>(u.routeDirs.size());
+            if (n > 0) u.pushWait = 0;                   // rota nova: [st+0x6C] = 0 (loc_44C1A0)
             if (n == 0) {
                 // loc_44C16D: sem rota p/ um ponto intermediário → o próximo.
                 if (ob.curWaypoint < ob.countMinus1 && guard < 64) { ++ob.curWaypoint; u.clearRoute(); continue; }   // sub_44C2F0

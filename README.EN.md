@@ -176,7 +176,7 @@ The game's `OUTPOST2.INI` file is respected. The port adds seven keys the
 original doesn't have — AI level, night darkness, volume, demo camera and
 fullscreen; they are documented in `PORT_STATUS.EN.md`.
 
-There are **106 command-line modes** for tests and captures, among them a
+There are **107 command-line modes** for tests and captures, among them a
 regression battery (`--savetest` proves save/reload determinism). The list is
 in `PORT_STATUS.EN.md`.
 
@@ -210,7 +210,7 @@ and what was checked and discarded from the cheat lists that circulate.
 
 ```
 src/
-  main.cpp        entry point + the 106 test/capture modes
+  main.cpp        entry point + the 107 test/capture modes
   app/            TApp, UIState, GameState (the game), ShellState, HUD,
                   the frame's 6 tabs, minimap, globe, dialogs
   game/           the simulation: units, structures, movement, pathfinder,
@@ -252,6 +252,11 @@ PBMP tilesets, the `op2_art` sprites, the data sheets and the `.ANI` cursors.
   the missile on its way to the enemy.
 - **Walls no longer fail to build** next to a wall under construction, Blight
   or lava. A neighbouring building still blocks, as it should.
+- **A parked vehicle gets out of the way.** A truck (or any vehicle) parked on
+  a dock, or in the path, is now pushed to a neighbouring tile when another
+  needs to pass, as in the original. The port used to let both drive onto the
+  same tile. A busy vehicle (mid-route) or an armed enemy is not pushed: the
+  one arriving waits a little and finds another way.
 - **One-click ore route** (*an addition of this port; not in the original*):
   with empty cargo trucks selected, **right-clicking a mine's dock** builds the
   whole cycle — it picks the nearest compatible smelter **that is running and

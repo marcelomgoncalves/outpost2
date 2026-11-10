@@ -114,10 +114,16 @@ int pfOccupantPassable(int occId, int searcherId) {  // sub_44BD60
     if (searcherId > 0 && searcherId < static_cast<int>(g_units.size()))
         searcherOwner = g_units[searcherId].owner & 0x0F;
 
-    // Aliança: sub_490C50(cmdObj[occOwner], searcherOwner).
+    // Aliança: sub_490C50(cmdObj[occOwner], searcherOwner). Não-aliado ARMADO
+    // bloqueia; não-aliado DESARMADO passa (um caminhão inimigo parado também
+    // sai da frente):
+    //     call sub_490C50 / test eax,eax / jnz segue      -> aliado
+    //     test [+44h],10h / jz segue                     -> desarmado
+    //     xor eax,eax / retn                             -> armado: bloqueia
+    // O porte tinha isto INVERTIDO (bloqueava o desarmado e deixava o armado).
     bool allied = pfPlayersAllied(occOwner, searcherOwner);
     if (!allied) {
-        if (!(f & 0x10)) return 0;                   // não-aliado e sem flag 0x10 → bloqueia
+        if (f & 0x10) return 0;                      // não-aliado e armado → bloqueia
     }
 
     uint8_t action = o.action;                       // [+0x21]

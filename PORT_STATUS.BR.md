@@ -48,7 +48,7 @@ com o registro de `src/mission/op2_api.cpp`.
 
 ```
 src/
-  main.cpp        entrada + os 106 modos de teste/captura
+  main.cpp        entrada + os 107 modos de teste/captura
   app/            TApp, UIState, GameState (o jogo), ShellState, HUD,
                   as 6 abas do quadro, minimapa, globo, diálogos
   game/           a simulação: unidades, estruturas, movimento, pathfinder,
@@ -1983,6 +1983,119 @@ recuo **3**.
 
 ---
 
+## 5.24. O veículo parado sai da frente (2026-11-10)
+
+Pedido: *um caminhão parado na doca impede o outro de atracar — ele tem de
+sair*. Isto **é do original** e tinha ficado de fora do porte.
+
+### O defeito de fundo
+
+No original, o passo do veículo (`sub_44B650`) **nunca entra numa célula
+ocupada**: `test ebx, 0AFFF0000h` — só anda se não houver ocupante nem parede.
+O porte usava ali o `pfCanEnter`, que é um predicado do **planejador** ("dá
+para planejar uma rota passando por aqui"). Com um veículo empurrável na
+célula, o planejador diz "dá" — e o passo **entrava**, sobrescrevendo a
+ocupação do mapa: dois veículos no mesmo tile, e a ocupação apontando só para
+um deles.
+
+O comentário antigo em `movement.cpp` dizia isso com todas as letras: *"o
+original desvia (sub_44BD60/sub_44BBA0); aqui a rota é recalculada"*.
+
+### O que o original faz (`sub_44B650`)
+
+Com uma unidade na célula de destino:
+
+| | |
+|---|---|
+| célula com parede **e** ocupante | desiste (`loc_44B998`) |
+| ocupante que **não** pode ser empurrado | desiste |
+| ocupante empurrável | empurra (`sub_44BBA0`) e **espera** |
+
+A espera é um passo de **deslocamento zero** (`[st+0x58] = [st+0x5C] = 0`):
+a rota fica, e no tique seguinte a unidade tenta a mesma direção. Um contador
+(`[st+0x6C]`) limita a **20** tentativas; depois desiste e replaneja. O
+contador zera quando um passo **com** deslocamento termina (`loc_44C0F1`) e
+quando a rota é replanejada (`loc_44C1A0`).
+
+### Quem pode ser empurrado (`sub_44BD60`)
+
+Já estava portado, como `pfOccupantPassable`: veículo, vivo, sem EMP, **aliado
+ou desarmado**, e fora destas ações — rota de minério `0x27`, `0x28`, indo
+atracar `3`, andando `1`, `0x26`, `0x1F`, `0x0F`. Um caminhão **parado** é
+empurrado; um caminhão **no meio da própria rota**, esperando na doca, não é —
+quem chega espera e, em 20, replaneja.
+
+**Estava invertido** no porte o teste da arma para não-aliados:
+
+```
+call sub_490C50 / test eax,eax / jnz segue   ; aliado
+test [+44h],10h / jz segue                   ; desarmado
+xor eax,eax / retn                           ; armado: bloqueia
+```
+
+Inimigo **armado** bloqueia; inimigo **desarmado** pode ser empurrado. O porte
+fazia o contrário. Como o mesmo predicado alimenta o planejador
+(`pfCanEnter`/`pfMoveCost`), a correção também muda como as unidades planejam
+rotas em volta de inimigos.
+
+### O empurrão (`sub_44BBA0`)
+
+Entre as **7** vizinhas do bloqueador — todas menos a que volta para quem
+empurra, `(dir + 4) & 7` —, a de menor custo de terreno (`sub_438390`, com o
+contexto do **bloqueador**). A direção do **próximo trecho de quem empurra**
+(`routeDirs[idx+1]` dele — o `edi` ali é quem empurra, não o empurrado) leva
+**1,5×**, para o bloqueador não ser mandado para dentro do caminho que vem a
+seguir. O parado recebe a ordem de ir para lá (`vt[0x7C]` = `sub_44C350`) e
+`[+0x22] = 1`, incondicionalmente.
+
+**Corrigido em relação ao original:** o custo de célula bloqueada é
+`0x7FFFFFFF`, e `custo * 3 / 2` em 32 bits dá a volta para ~`0x3FFFFFFE` — uma
+célula **intransitável** na direção penalizada podia ganhar a escolha. Aqui
+bloqueada continua bloqueada.
+
+**Trava:** no original, `vt[0x7C]` chama o planejador (`sub_4401F0`) e o
+empurrado anda no **próprio** tique — ninguém empurra de dentro de um
+empurrão. O porte usa `unitStepToward`, que dá o passo na hora; uma trava
+reproduz o original: quem está sendo empurrado não empurra.
+
+### O que ficou de fora
+
+O ramo do bloqueador **em movimento**, vindo de frente: o original insere um
+ponto de passagem na frente da ordem dele (`sub_44BFD0`). Com o índice do ponto
+atual em 0, o decremento leva a −1 e a escrita cai em `[ordem+0x10]`, antes do
+vetor — depende de partes do bloco de ordem ainda não decodificadas. Sem ele,
+quem empurra espera e, em 20, replaneja.
+
+### O teste — `--pushtest <mapa>`
+
+18 casos, e uma **invariante vigiada a cada tique**: dois veículos em repouso
+nunca no mesmo tile, e a ocupação do mapa sob cada um aponta para ele.
+
+1. **O caso do pedido.** Um caminhão parado na doca de uma fundição; outro
+   mandado atracar ali pelo clique direito. A ocupação da doca deixa o parado
+   no tique **157** e passa ao que chegou no **158** — estritamente depois —,
+   após **6** tentativas; e o contador sai zerado depois que ele entra andando.
+2. **A regra da arma:** inimigo armado não é empurrado; desarmado é.
+3. **Quem não pode ser empurrado não é invadido:** com um inimigo armado na
+   doca, o que chega nem entra, nem empurra, nem fica esperando.
+4. **Encurralado:** um caminhão empurrável na doca com **todas** as saídas
+   ocupadas por outros parados. Ele não sai; quem chega sobe até o limite,
+   desiste, replaneja e recomeça — e o contador nunca passa dele.
+
+Neutralizando, uma peça de cada vez: voltar a entrar em célula ocupada **6**
+falhas; o empurrão sem efeito **3**; sem o limite de 20 **1**; o teste da arma
+invertido de novo **5**; sem a trava **2**; o contador sem zerar na rota nova
+**1**; sem zerar no passo com deslocamento **1**.
+
+> Duas armadilhas do teste, e nenhuma era defeito: (1) medir quem saiu antes
+> pelo tile do **pixel** — a ocupação muda no começo do passo e os dois
+> deslizam juntos, então qual troca de tile primeiro depende da direção; o
+> certo é medir a **ocupação** da doca. (2) O primeiro cerco não cercava: a
+> doca da fundição é a coluna 4 de 4, a borda direita, então leste e nordeste
+> também são livres. O teste agora ocupa todas as vizinhas transitáveis.
+
+---
+
 ## 6. Build e execução
 
 **Toolchain:** CMake >= 3.15 + MSVC, C++17, SDL2 2.30.9 (em `third_party/`).
@@ -2004,7 +2117,7 @@ missão e os recursos originais do diretório de trabalho).
 
 ### Testes por linha de comando
 
-São 106 modos. Os que cobrem regressão de verdade:
+São 107 modos. Os que cobrem regressão de verdade:
 
 | Modo | O que prova |
 |---|---|
@@ -2025,6 +2138,7 @@ São 106 modos. Os que cobrem regressão de verdade:
 | `--bannertest <DLL> [bmp]` | o letreiro de fim de missão: cor, tamanho, contorno e centragem, medidos no quadro desenhado |
 | `--pausetest <DLL> [bmp]` | a pausa do `Ctrl+P`: o relógio para, o som suspende, o letreiro aparece, e em rede nada disso |
 | `--autoroutetest <mapa>` | a rota de minério automática: a fundição disponível mais próxima, as três minas, as duas raças, e o ciclo rodando |
+| `--pushtest <mapa>` | o veículo parado sai da frente: a doca, a regra da arma, o encurralado, e a invariante de ocupação a cada tique |
 | `--missiontest <DLL> <saida> <ticks>` | carrega e roda qualquer missão |
 | `--aitest <DLL campanha> <DLL multi>` | o `AILevel` chega ao jogador 0 e o multijogador fica intacto |
 | `--helptest [tópico]` | o leitor do `.HLP` e a navegação da tela do manual |

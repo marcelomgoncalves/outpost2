@@ -4349,6 +4349,255 @@ static int runBannerTest(const std::string& dll, const std::string& shot) {
     return ruins ? 1 : 0;
 }
 
+// --pushtest <mapa>: o veiculo PARADO no caminho sai da frente (sub_44B650 ->
+// sub_44BD60 -> sub_44BBA0). O caso do pedido: uma fundicao com um caminhao
+// estacionado na doca e outro mandado atracar ali. O porte entrava na celula
+// ocupada (o passo usava o pfCanEnter, que e do planejador) e os dois ficavam
+// no mesmo tile; o original manda o parado para uma vizinha e espera.
+//
+// A cada tique vigia a invariante: dois veiculos EM REPOUSO nunca no mesmo
+// tile, e a ocupacao do mapa sob cada um aponta para ele.
+static int runPushTest(const std::string& mapName) {
+    if (SDL_Init(SDL_INIT_VIDEO) != 0) return 1;
+    op2::g_ResManager.init(".");
+    op2::g_art.load();
+    op2::Renderer renderer;
+    if (!renderer.init("OP2 pushtest", 1280, 960, false)) { SDL_Quit(); return 1; }
+    op2::GameState gs;
+    if (!gs.load(mapName)) { renderer.shutdown(); SDL_Quit(); return 2; }
+    gs.onActivate();
+    op2::resetUnits();
+
+    const int W = op2::g_gameMap.width(), H = op2::g_gameMap.height();
+    int bx = -1, by = -1;
+    for (int y = 3; y < H - 16 && bx < 0; ++y)
+        for (int x = 3; x < W - 30 && bx < 0; ++x) {
+            bool ok = true;
+            for (int dy = -1; dy <= 14 && ok; ++dy)
+                for (int dx = -2; dx <= 26 && ok; ++dx)
+                    if (!op2::g_gameMap.isPassable(op2::LOCATION{x + dx, y + dy})) ok = false;
+            if (ok) { bx = x; by = y; }
+        }
+    if (bx < 0) { std::printf("[Push] sem area livre\n"); return 3; }
+
+    op2::Unit cc, tok;
+    op2::TethysGame::CreateUnit(cc, op2::mapCommandCenter, op2::LOCATION{bx + 4, by + 3}, 0);
+    op2::TethysGame::CreateUnit(tok, op2::mapTokamak, op2::LOCATION{bx + 7, by + 3}, 0);
+    op2::g_playerData[0].workers = 60;
+    op2::g_playerData[0].scientists = 20;
+    op2::g_playerData[0].foodStored = 100000;
+    op2::colonyMarkDirty(0);
+    const int fund = op2::placeBuilding(0x36, bx + 4, by + 5, 0);
+    if (!fund) { std::printf("[Push] a fundicao nao subiu\n"); return 4; }
+    for (int t = 0; t < 60; ++t) gs.onIdle(renderer, 0.2501f / 4.0f);
+    int dx = 0, dy = 0;
+    op2::dockCell(fund, dx, dy);
+
+    struct Caso { std::string nome; long long obtido; long long esperado; };
+    std::vector<Caso> casos;
+
+    // A invariante, conferida a cada tique.
+    int violacoes = 0;
+    std::string primeira;
+    const auto vigia = [&](int t) {
+        std::vector<int> repouso;
+        for (int i = 1; i < (int)op2::g_units.size(); ++i) {
+            const op2::UnitRecord& r = op2::g_units[i];
+            if (r.id == -1 || (r.flags & op2::UNIT_DEAD) || !(r.flags & op2::UNIT_VEHICLE)) continue;
+            if (r.stepTicks > 0 || r.velX || r.velY) continue;     // no meio de um passo
+            repouso.push_back(i);
+            const int occ = op2::g_gameMap.cellOccupant(r.pixelX >> 5, r.pixelY >> 5);
+            if (occ != i) {
+                if (!violacoes++) primeira = "t=" + std::to_string(t) + ": a celula de " + std::to_string(i) +
+                                             " aponta para " + std::to_string(occ);
+            }
+        }
+        for (size_t a = 0; a < repouso.size(); ++a)
+            for (size_t b = a + 1; b < repouso.size(); ++b) {
+                const op2::UnitRecord& ra = op2::g_units[repouso[a]];
+                const op2::UnitRecord& rb = op2::g_units[repouso[b]];
+                if ((ra.pixelX >> 5) == (rb.pixelX >> 5) && (ra.pixelY >> 5) == (rb.pixelY >> 5)) {
+                    if (!violacoes++) primeira = "t=" + std::to_string(t) + ": " + std::to_string(repouso[a]) +
+                                                 " e " + std::to_string(repouso[b]) + " no mesmo tile";
+                }
+            }
+    };
+
+    // Poe um veiculo exatamente sobre a doca, como o --oretest faz.
+    const auto naDoca = [&](op2::map_id tipo, int dono) {
+        op2::Unit v;
+        op2::TethysGame::CreateUnit(v, tipo, op2::LOCATION{dx + 3, dy + 3}, dono);
+        op2::UnitRecord& r = op2::g_units[v.id()];
+        op2::g_gameMap.clearUnitOccupancy(r.pixelX >> 5, r.pixelY >> 5);
+        r.pixelX = dx << 5; r.pixelY = dy << 5;
+        op2::g_gameMap.setUnitOccupancy(dx, dy, v.id());
+        return v.id();
+    };
+
+    // ============ 1) o caso do pedido: caminhao PARADO na doca =============
+    const int parado = naDoca(op2::mapCargoTruck, 0);
+    op2::Unit chega;
+    op2::TethysGame::CreateUnit(chega, op2::mapCargoTruck, op2::LOCATION{dx + 6, dy + 4}, 0);
+    casos.push_back({"o parado esta na doca (premissa)",
+                     op2::g_gameMap.cellOccupant(dx, dy) == parado ? 1 : 0, 1});
+    casos.push_back({"... e pode ser empurrado (premissa)",
+                     op2::pfOccupantPassable(parado, chega.id()), 1});
+    gs.setSelection({chega.id()});
+    gs.debugRightClickTile(renderer, dx, dy);                  // mandado atracar ali
+    int saiu = -1, chegou = -1, esperaMax = 0, docaLivre = -1, docaDele = -1;
+    for (int t = 0; t < 800; ++t) {
+        gs.onIdle(renderer, 0.2501f / 4.0f);
+        vigia(t);
+        const op2::UnitRecord& p = op2::g_units[parado];
+        const op2::UnitRecord& c = op2::g_units[chega.id()];
+        esperaMax = std::max(esperaMax, (int)c.pushWait);
+        if (saiu < 0 && ((p.pixelX >> 5) != dx || (p.pixelY >> 5) != dy)) saiu = t;
+        if (chegou < 0 && (c.pixelX >> 5) == dx && (c.pixelY >> 5) == dy && c.stepTicks <= 0) chegou = t;
+        // A OCUPACAO da doca: sai do parado, depois vai para o que chegou.
+        const int occ = op2::g_gameMap.cellOccupant(dx, dy);
+        if (docaLivre < 0 && occ != parado) docaLivre = t;
+        if (docaDele < 0 && occ == chega.id()) docaDele = t;
+    }
+    std::printf("[Push] doca (%d,%d): ocupacao deixa o parado em t=%d e passa ao outro em t=%d;"
+                " tile do parado muda em t=%d, o outro para na doca em t=%d; espera maxima %d\n",
+                dx, dy, docaLivre, docaDele, saiu, chegou, esperaMax);
+    casos.push_back({"o caminhao parado SAI da doca", saiu >= 0 ? 1 : 0, 1});
+    casos.push_back({"... e o que chegou ENTRA nela", chegou >= 0 ? 1 : 0, 1});
+    // Pela ocupacao, e estritamente DEPOIS: o que chega so entra no tique em
+    // que tenta de novo, com a doca ja livre.
+    casos.push_back({"... depois que a doca ficou livre",
+                     (docaLivre >= 0 && docaDele > docaLivre) ? 1 : 0, 1});
+    casos.push_back({"... tendo esperado (empurrou e esperou)", esperaMax > 0 ? 1 : 0, 1});
+    casos.push_back({"... sem passar de 20 tentativas", esperaMax <= 21 ? 1 : 0, 1});
+    // loc_44C0F1: um passo COM deslocamento zera o contador. Ele esperou, entrou
+    // na doca andando -- tem de sair dali com o contador em zero, senao a
+    // proxima obstrucao no caminho desistiria antes das 20.
+    casos.push_back({"... e o contador zera depois que ele anda",
+                     (int)op2::g_units[chega.id()].pushWait, 0});
+
+    // ============ 2) a regra da arma (sub_44BD60), desinvertida ============
+    {
+        op2::Unit inimigoArmado, inimigoDesarmado;
+        op2::TethysGame::CreateUnit(inimigoArmado, op2::mapCargoTruck, op2::LOCATION{bx + 20, by + 12}, 1);
+        op2::TethysGame::CreateUnit(inimigoDesarmado, op2::mapCargoTruck, op2::LOCATION{bx + 22, by + 12}, 1);
+        op2::g_units[inimigoArmado.id()].flags |= op2::UNIT_ARMED;
+        casos.push_back({"inimigo ARMADO nao e empurrado",
+                         op2::pfOccupantPassable(inimigoArmado.id(), chega.id()), 0});
+        casos.push_back({"inimigo DESARMADO e empurrado",
+                         op2::pfOccupantPassable(inimigoDesarmado.id(), chega.id()), 1});
+        op2::g_units[inimigoArmado.id()].flags |= op2::UNIT_DEAD;
+        op2::g_units[inimigoDesarmado.id()].flags |= op2::UNIT_DEAD;
+        op2::g_gameMap.clearUnitOccupancy((op2::g_units[inimigoArmado.id()].pixelX) >> 5,
+                                          (op2::g_units[inimigoArmado.id()].pixelY) >> 5);
+        op2::g_gameMap.clearUnitOccupancy((op2::g_units[inimigoDesarmado.id()].pixelX) >> 5,
+                                          (op2::g_units[inimigoDesarmado.id()].pixelY) >> 5);
+    }
+
+    // ===== 3) quem NAO pode ser empurrado nao e invadido (o defeito de fundo) =====
+    // Um inimigo armado parado na doca: o caminhao que chega espera, desiste e
+    // replaneja -- mas nunca entra no tile dele.
+    {
+        // tira os dois da doca
+        for (int id : {parado, chega.id()}) {
+            op2::UnitRecord& r = op2::g_units[id];
+            op2::g_gameMap.clearUnitOccupancy(r.pixelX >> 5, r.pixelY >> 5);
+            r.flags |= op2::UNIT_DEAD;
+        }
+        const int tanque = naDoca(op2::mapCargoTruck, 1);
+        op2::g_units[tanque].flags |= op2::UNIT_ARMED;
+        op2::Unit c2;
+        op2::TethysGame::CreateUnit(c2, op2::mapCargoTruck, op2::LOCATION{dx + 6, dy + 4}, 0);
+        gs.setSelection({c2.id()});
+        gs.debugRightClickTile(renderer, dx, dy);
+        int invadiu = 0, tanqueSaiu = 0, esperou = 0;
+        for (int t = 0; t < 400; ++t) {
+            gs.onIdle(renderer, 0.2501f / 4.0f);
+            vigia(1000 + t);
+            const op2::UnitRecord& c = op2::g_units[c2.id()];
+            const op2::UnitRecord& k = op2::g_units[tanque];
+            if ((c.pixelX >> 5) == dx && (c.pixelY >> 5) == dy) ++invadiu;
+            if ((k.pixelX >> 5) != dx || (k.pixelY >> 5) != dy) ++tanqueSaiu;
+            if (c.pushWait > 0) ++esperou;
+        }
+        std::printf("[Push] inimigo armado na doca: invadiu %d tiques, ele saiu %d, esperou %d\n",
+                    invadiu, tanqueSaiu, esperou);
+        casos.push_back({"inimigo armado na doca nao e invadido", invadiu, 0});
+        casos.push_back({"... nem empurrado", tanqueSaiu, 0});
+        casos.push_back({"... e quem chega nao fica esperando (desiste)", esperou, 0});
+    }
+
+    // ===== 4) empurravel mas ENCURRALADO: o limite de 20 tentativas =====
+    // A doca e a linha de baixo da fundicao: em volta dela so as tres casas de
+    // baixo sao livres. Com as duas diagonais ocupadas por caminhoes parados,
+    // o da doca pode ser empurrado mas nao tem para onde ir -- quem esta sendo
+    // empurrado nao empurra (a trava). Quem chega por baixo espera, chega a 20,
+    // desiste, replaneja e tenta de novo: o contador nunca passa do limite.
+    {
+        for (int i = 1; i < (int)op2::g_units.size(); ++i) {   // limpa a doca e arredores
+            op2::UnitRecord& r = op2::g_units[i];
+            if (r.id == -1 || (r.flags & op2::UNIT_DEAD) || !(r.flags & op2::UNIT_VEHICLE)) continue;
+            op2::g_gameMap.clearUnitOccupancy(r.pixelX >> 5, r.pixelY >> 5);
+            r.flags |= op2::UNIT_DEAD;
+        }
+        const int preso = naDoca(op2::mapCargoTruck, 0);
+        const auto em = [&](int x, int y) {
+            op2::Unit v;
+            op2::TethysGame::CreateUnit(v, op2::mapCargoTruck, op2::LOCATION{x, y}, 0);
+            op2::UnitRecord& r = op2::g_units[v.id()];
+            op2::g_gameMap.clearUnitOccupancy(r.pixelX >> 5, r.pixelY >> 5);
+            r.pixelX = x << 5; r.pixelY = y << 5;
+            op2::g_gameMap.setUnitOccupancy(x, y, v.id());
+            return v.id();
+        };
+        int cercas = 0;
+        for (int d = 0; d < 8; ++d) {
+            const int x = dx + op2::kDir8[d].dx, y = dy + op2::kDir8[d].dy;
+            if (x == dx && y == dy + 1) continue;                  // a de baixo: por onde chega
+            if (!op2::g_gameMap.isPassable(op2::LOCATION{x, y})) continue;
+            if (op2::g_gameMap.cellOccupant(x, y)) continue;
+            em(x, y);
+            ++cercas;
+        }
+        std::printf("[Push] encurralado: %d vizinhas da doca ocupadas\n", cercas);
+        op2::Unit c4;
+        op2::TethysGame::CreateUnit(c4, op2::mapCargoTruck, op2::LOCATION{dx, dy + 4}, 0);
+        gs.setSelection({c4.id()});
+        gs.debugRightClickTile(renderer, dx, dy);
+        int esperaMax4 = 0, presoSaiu = 0, desistencias = 0, antes = 0;
+        for (int t = 0; t < 600; ++t) {
+            gs.onIdle(renderer, 0.2501f / 4.0f);
+            vigia(2000 + t);
+            const op2::UnitRecord& c = op2::g_units[c4.id()];
+            const op2::UnitRecord& p = op2::g_units[preso];
+            esperaMax4 = std::max(esperaMax4, (int)c.pushWait);
+            if (antes > c.pushWait) ++desistencias;          // o contador voltou: replanejou
+            antes = c.pushWait;
+            if ((p.pixelX >> 5) != dx || (p.pixelY >> 5) != dy) ++presoSaiu;
+        }
+        std::printf("[Push] encurralado: espera maxima %d, %d recomecos, o da doca saiu %d tiques\n",
+                    esperaMax4, desistencias, presoSaiu);
+        casos.push_back({"encurralado: o da doca nao tem para onde ir", presoSaiu, 0});
+        casos.push_back({"... quem chega chega ao limite de 20", esperaMax4 >= 20 ? 1 : 0, 1});
+        casos.push_back({"... e nunca passa dele", esperaMax4 <= 21 ? 1 : 0, 1});
+        casos.push_back({"... desiste e recomeca", desistencias > 0 ? 1 : 0, 1});
+    }
+
+    casos.push_back({"invariante: nenhum par no mesmo tile, ocupacao correta", violacoes, 0});
+    if (violacoes) std::printf("[Push] primeira violacao: %s\n", primeira.c_str());
+
+    int ruins = 0;
+    for (const Caso& c : casos) {
+        const bool ok = c.obtido == c.esperado;
+        if (!ok) ++ruins;
+        std::printf("[Push] %-52s %lld (esperado %lld) %s\n", c.nome.c_str(), c.obtido, c.esperado,
+                    ok ? "ok" : "FALHOU");
+    }
+    std::printf("[Push] %d casos, %d falhas\n", (int)casos.size(), ruins);
+    renderer.shutdown();
+    SDL_Quit();
+    return ruins ? 1 : 0;
+}
+
 // --autoroutetest <mapa>: o atalho da rota de minerio (acrescimo deste porte,
 // chave "AutoOreRoute"). Monta uma colonia com uma mina comum e TRES
 // fundicoes -- uma comum longe, uma comum perto e uma de minerio raro ainda
@@ -6552,6 +6801,8 @@ int main(int argc, char* argv[]) {
             return runMusicTest(argv[i + 1]);
         if (std::strcmp(argv[i], "--optmenutest") == 0 && i + 1 < argc)
             return runOptMenuTest(argv[i + 1]);
+        if (std::strcmp(argv[i], "--pushtest") == 0 && i + 1 < argc)
+            return runPushTest(argv[i + 1]);
         if (std::strcmp(argv[i], "--autoroutetest") == 0 && i + 1 < argc)
             return runAutoRouteTest(argv[i + 1]);
         if (std::strcmp(argv[i], "--pausetest") == 0 && i + 1 < argc)

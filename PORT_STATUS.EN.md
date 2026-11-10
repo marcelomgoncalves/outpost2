@@ -20,7 +20,9 @@
 > draw it) **5.22** (the `Ctrl+P` pause, command 40001, with the same
 > banner) and **5.23** (an addition of this port, not in the original:
 > right-clicking a mine's dock with empty cargo trucks builds the whole ore
-> route to the nearest *available* compatible smelter — key `AutoOreRoute`). The recent changes are summarised in
+> route to the nearest *available* compatible smelter — key `AutoOreRoute`) and
+> **5.24** (a vehicle parked in the way — on a dock, say — is pushed aside,
+> as `sub_44B650`/`sub_44BBA0` do; the port used to drive into occupied cells). The recent changes are summarised in
 > [README.EN.md](README.EN.md).
 
 # Outpost 2: Divided Destiny — Modern Port (C++17/SDL2)
@@ -71,7 +73,7 @@ coverage by comparing the DLLs' import tables against the registry in
 
 ```
 src/
-  main.cpp        entry point + the 106 test/capture modes
+  main.cpp        entry point + the 107 test/capture modes
   app/            TApp, UIState, GameState (the game), ShellState, HUD,
                   the frame's 6 tabs, minimap, globe, dialogs
   game/           the simulation: units, structures, movement, pathfinder,
@@ -653,7 +655,7 @@ mission DLLs and the original resources from the working directory).
 
 ### Command-line tests
 
-There are 106 modes. The ones that cover real regressions:
+There are 107 modes. The ones that cover real regressions:
 
 | Mode | What it proves |
 |---|---|

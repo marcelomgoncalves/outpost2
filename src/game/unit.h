@@ -170,6 +170,11 @@ struct UnitRecord {
     // Passo em curso — estado de movimento [unit+0x34] do original (sub_44B650
     // monta, sub_44C0B0 aplica 1x por tick):
     int      stepTicks = 0;        // [st+0x64] ticks restantes do passo
+    // [st+0x6C]: quantas vezes seguidas o passo esbarrou numa unidade e mandou
+    // ela sair da frente (sub_44B650). Em 20 desiste e replaneja. Zera quando
+    // um passo COM deslocamento termina (loc_44C0F1) e quando a rota e
+    // replanejada (loc_44C1A0).
+    uint8_t  pushWait = 0;
     int      velX = 0, velY = 0;   // [st+0x58]/[st+0x5C] velocidade 16.16 (px/tick)
     uint16_t fracX = 0, fracY = 0; // [st+0x44]/[st+0x46] fração 16 bits da posição
     int      turnTicks = 0;        // [st+0x68] ticks de giro restantes
