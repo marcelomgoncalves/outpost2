@@ -12,6 +12,7 @@
 !/LICENSE
 !/README*.md
 !/PORT_STATUS*.md
+!/CHANGELOG*.md
 !/CMakeLists.txt
 !/src/
 !/tools/

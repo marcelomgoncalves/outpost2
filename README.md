@@ -8,6 +8,8 @@ in C++17 + SDL2. Requires a legitimate installed copy of the original game.
 | 🇬🇧 English | [README.EN.md](README.EN.md) | [PORT_STATUS.EN.md](PORT_STATUS.EN.md) |
 | 🇧🇷 Português (BR) | [README.BR.md](README.BR.md) | [PORT_STATUS.BR.md](PORT_STATUS.BR.md) |
 
+What changed, by date / O que mudou, por data: [CHANGELOG.md](CHANGELOG.md)
+
 ## Legal notice
 
 Unofficial, non-commercial fan project. Not affiliated with or endorsed by
