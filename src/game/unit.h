@@ -114,6 +114,10 @@ struct OrderBlock {
     // y em bits20-28, campo de 29 bits. Copiada verbatim do buffer de comando.
     std::vector<uint32_t> waypoints;
     int curWaypoint = 0;   // [0x08] índice do waypoint atual (sub_44BEC0 avança)
+    // [0x10]: a vaga de índice −1, logo antes do vetor ([0x14]). É onde o
+    // DESVIO cai quando a unidade está no 1º ponto (sub_44BFD0 decrementa o
+    // índice e grava ali); o índice nunca passa de −1. Ver wpAt (movement.cpp).
+    uint32_t detourSlot = 0;
 };
 
 // Registro de unidade — no original é um array global (dword_54EC08) de registros

@@ -176,7 +176,7 @@ The game's `OUTPOST2.INI` file is respected. The port adds seven keys the
 original doesn't have — AI level, night darkness, volume, demo camera and
 fullscreen; they are documented in `PORT_STATUS.EN.md`.
 
-There are **109 command-line modes** for tests and captures, among them a
+There are **110 command-line modes** for tests and captures, among them a
 regression battery (`--savetest` proves save/reload determinism). The list is
 in `PORT_STATUS.EN.md`.
 
@@ -210,7 +210,7 @@ and what was checked and discarded from the cheat lists that circulate.
 
 ```
 src/
-  main.cpp        entry point + the 109 test/capture modes
+  main.cpp        entry point + the 110 test/capture modes
   app/            TApp, UIState, GameState (the game), ShellState, HUD,
                   the frame's 6 tabs, minimap, globe, dialogs
   game/           the simulation: units, structures, movement, pathfinder,
@@ -252,6 +252,13 @@ PBMP tilesets, the `op2_art` sprites, the data sheets and the `.ANI` cursors.
   the missile on its way to the enemy.
 - **Walls no longer fail to build** next to a wall under construction, Blight
   or lava. A neighbouring building still blocks, as it should.
+- **Whoever comes head-on gives way.** Two vehicles meeting head-on in a
+  narrow passage no longer just wait for each other: the one between two steps
+  gets a detour to a side tile, waits there a moment and carries on, as in the
+  original. The port used to leave both standing until they gave up and looked
+  for another route. Also, a defect of the original fixed: if the detour tile
+  gets blocked, the vehicle no longer makes a pointless stop at the next point
+  of its path.
 - **A vehicle behind a building stays behind it.** The port drew every
   building and then every vehicle, so a vehicle passing north of a tall
   building was drawn over it. The order is now the original's: buildings and

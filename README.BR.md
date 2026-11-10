@@ -178,7 +178,7 @@ que o original não tem — nível da IA, escuridão da noite, volume, câmera d
 demo, tela cheia, a pele dos menus (`MenuSkin`) e a volta horizontal do mapa
 (`MapWrap`); estão documentadas no `PORT_STATUS.BR.md`.
 
-Há **109 modos de linha de comando** para testes e capturas, entre eles uma
+Há **110 modos de linha de comando** para testes e capturas, entre eles uma
 bateria de regressão (`--savetest` prova o determinismo de salvar/recarregar).
 A lista está no `PORT_STATUS.BR.md`.
 
@@ -212,7 +212,7 @@ e descartado das listas de cheat que circulam por aí.
 
 ```
 src/
-  main.cpp        entrada + os 109 modos de teste/captura
+  main.cpp        entrada + os 110 modos de teste/captura
   app/            TApp, UIState, GameState (o jogo), ShellState, HUD,
                   as 6 abas do quadro, minimapa, globo, diálogos
   game/           a simulação: unidades, estruturas, movimento, pathfinder,
@@ -255,6 +255,13 @@ cursores `.ANI`.
   míssil que ia no inimigo.
 - **O muro não falha mais** por ter perto dele um muro em obra, a praga ou
   lava. Prédio vizinho continua impedindo, como deve.
+- **Quem vem de frente dá passagem.** Dois veículos que se encontram de frente
+  num caminho estreito não ficam mais esperando um pelo outro: o que está entre
+  dois passos recebe um desvio para uma casa ao lado, espera ali um instante e
+  retoma o caminho, como no original. Antes o porte deixava os dois parados até
+  desistirem e procurarem outra rota. De quebra, um defeito do original
+  corrigido: se a casa do desvio fica bloqueada, o veículo não faz mais a
+  parada à toa no ponto seguinte do caminho.
 - **Veículo atrás de prédio fica atrás do prédio.** O porte desenhava todos os
   prédios e depois todos os veículos, então um veículo passando ao norte de um
   prédio alto aparecia por cima dele. Agora a ordem é a do original: prédios e

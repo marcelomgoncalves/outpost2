@@ -4350,6 +4350,238 @@ static int runBannerTest(const std::string& dll, const std::string& shot) {
     return ruins ? 1 : 0;
 }
 
+// --detourtest <mapa>: o DESVIO de quem vem de frente (sub_44BBA0, ramo do
+// bloqueador em movimento -> sub_44BFD0; a parada de 32 tiques em loc_44C1D2).
+// Tres partes. (1) Dois veiculos, com ordem de mover dada pelo clique direito
+// de verdade, um contra o outro por um corredor murado com um nicho no meio:
+// quem acha o outro na frente -- andando, entre dois passos, vindo de frente --
+// insere um desvio na ordem dele; o desviado vai ao nicho, para 32 tiques e
+// retoma; os dois chegam. Vigia a cada tique que nunca ha dois em repouso no
+// mesmo tile. (2) A tabela de decisao do ramo "andando", com o estado montado
+// a mao. (3) O desvio inalcancavel: pulado, e o bit 2 sai junto (corrigido).
+static int runDetourTest(const std::string& mapName) {
+    if (SDL_Init(SDL_INIT_VIDEO) != 0) return 1;
+    op2::g_ResManager.init(".");
+    op2::g_art.load();
+    op2::Renderer renderer;
+    if (!renderer.init("OP2 detourtest", 1280, 960, false)) { SDL_Quit(); return 1; }
+    op2::GameState gs;
+    if (!gs.load(mapName)) { renderer.shutdown(); SDL_Quit(); return 2; }
+    gs.onActivate();
+    op2::resetUnits();
+
+    // Um CORREDOR: em campo aberto o planejador contorna o outro (veiculo
+    // andando custa 4x) e os dois nunca ficam de frente. A linha `by` e livre
+    // de x0 a x0+L; acima e abaixo, quatro linhas de parede cada -- dar a volta
+    // fica bem mais longo que atravessar --, com um NICHO de uma casa no meio,
+    // embaixo. Partidas e destinos ficam em linhas diferentes, em diagonal,
+    // para que a rota de um nao passe pela casa onde o outro esta parado.
+    const int MW = op2::g_gameMap.width(), MH = op2::g_gameMap.height();
+    const int L = 12, G = 4;
+    int bx = -1, by = -1;
+    for (int y = 10; y < MH - 12 && bx < 0; ++y)
+        for (int x = 8; x < MW - L - 12 && bx < 0; ++x) {
+            bool ok = true;
+            for (int dy = -G - 3; dy <= G + 3 && ok; ++dy)
+                for (int dx = -6; dx <= L + 6 && ok; ++dx)
+                    if (!op2::g_gameMap.isPassable(op2::LOCATION{x + dx, y + dy})) ok = false;
+            if (ok) { bx = x; by = y; }
+        }
+    if (bx < 0) { std::printf("[Desvio] sem area livre\n"); return 3; }
+    const int x0 = bx, nichoX = bx + L / 2;
+    for (int x = x0; x <= x0 + L; ++x)
+        for (int dy = 1; dy <= G; ++dy) {
+            op2::createWallOrTube(x, by - dy, 0x12);
+            if (!(dy == 1 && x == nichoX)) op2::createWallOrTube(x, by + dy, 0x12);   // o nicho
+        }
+
+    op2::Unit a, b;
+    op2::TethysGame::CreateUnit(a, op2::mapCargoTruck, op2::LOCATION{x0 - 3, by - 2}, 0);
+    op2::TethysGame::CreateUnit(b, op2::mapCargoTruck, op2::LOCATION{x0 + L + 3, by - 2}, 0);
+    const int alvoAx = x0 + L + 3, alvoBx = x0 - 3, alvoY = by + 2;
+    gs.onIdle(renderer, 0.0f);
+    gs.setSelection({a.id()});
+    gs.debugRightClickTile(renderer, alvoAx, alvoY);         // A vai para a direita
+    gs.setSelection({b.id()});
+    gs.debugRightClickTile(renderer, alvoBx, alvoY);         // B vai para a esquerda
+    gs.setSelection({});
+
+    int violacoes = 0, desvio = 0, vaga = 0, juntos = 0, insercoes = 0, chegadas = 0, pausasOk = 0;
+    int chegouA = -1, chegouB = -1, quem = 0, desvioX = -1, desvioY = -1;
+    bool tinha[2] = {false, false};
+    std::string primeira;
+    const auto noCorredor = [&](const op2::UnitRecord& r) {
+        const int x = r.pixelX >> 5, y = r.pixelY >> 5;
+        return x >= x0 && x <= x0 + L && (y == by || (y == by + 1 && x == nichoX));
+    };
+    for (int t = 0; t < 3000 && (chegouA < 0 || chegouB < 0); ++t) {
+        gs.onIdle(renderer, 0.2501f / 4.0f);
+        int k = 0;
+        for (int id : {a.id(), b.id()}) {
+            const op2::UnitRecord& r = op2::g_units[id];
+            const bool tem = r.hasOrder && (r.order.flags & 2u);
+            if (tem) ++desvio;
+            if (tem && !tinha[k]) {                              // o desvio entrou
+                ++insercoes;
+                if (!quem) quem = id;
+                const uint32_t wp = r.order.curWaypoint < 0 ? r.order.detourSlot
+                                  : r.order.waypoints[static_cast<size_t>(r.order.curWaypoint)];
+                desvioX = op2::unpackLocX(wp);
+                desvioY = op2::unpackLocY(wp);
+            }
+            if (!tem && tinha[k] && r.hasOrder) {               // chegou ao desvio
+                ++chegadas;
+                if (r.stepTicks >= 0x18 && !r.velX && !r.velY && !r.turnStep &&
+                    (r.pixelX >> 5) == desvioX && (r.pixelY >> 5) == desvioY)
+                    ++pausasOk;
+                else
+                    std::printf("[Desvio] t=%d unidade %d saiu do desvio em (%d,%d) com passo %d, vel %d/%d "
+                                "(desvio era (%d,%d))\n", t, id, r.pixelX >> 5, r.pixelY >> 5,
+                                r.stepTicks, r.velX, r.velY, desvioX, desvioY);
+            }
+            tinha[k++] = tem;
+            if (r.hasOrder && r.order.curWaypoint == -1) ++vaga;
+        }
+        const op2::UnitRecord& ra = op2::g_units[a.id()];
+        const op2::UnitRecord& rb = op2::g_units[b.id()];
+        if (noCorredor(ra) && noCorredor(rb)) ++juntos;
+        if (chegouA < 0 && (ra.pixelX >> 5) == alvoAx && (ra.pixelY >> 5) == alvoY && !ra.hasOrder) chegouA = t;
+        if (chegouB < 0 && (rb.pixelX >> 5) == alvoBx && (rb.pixelY >> 5) == alvoY && !rb.hasOrder) chegouB = t;
+        // invariante: os dois em repouso nunca no mesmo tile, e a ocupacao certa
+        const bool repA = ra.stepTicks <= 0 && !ra.velX && !ra.velY;
+        const bool repB = rb.stepTicks <= 0 && !rb.velX && !rb.velY;
+        if (repA && repB && (ra.pixelX >> 5) == (rb.pixelX >> 5) && (ra.pixelY >> 5) == (rb.pixelY >> 5))
+            if (!violacoes++) primeira = "t=" + std::to_string(t) + ": os dois no mesmo tile";
+        for (int id : {a.id(), b.id()}) {
+            const op2::UnitRecord& r = op2::g_units[id];
+            if (r.stepTicks <= 0 && !r.velX && !r.velY &&
+                op2::g_gameMap.cellOccupant(r.pixelX >> 5, r.pixelY >> 5) != id)
+                if (!violacoes++) primeira = "t=" + std::to_string(t) + ": a celula de " + std::to_string(id) + " aponta para outro";
+        }
+    }
+    std::printf("[Desvio] corredor (%d..%d, y=%d, nicho x=%d): juntos %d tiques; desvios %d (unidade %d, casa (%d,%d)), "
+                "pendente %d tiques, na vaga -1 %d; chegadas ao desvio %d, com a parada de 32 %d; "
+                "A chegou t=%d, B chegou t=%d\n",
+                x0, x0 + L, by, nichoX, juntos, insercoes, quem, desvioX, desvioY, desvio, vaga,
+                chegadas, pausasOk, chegouA, chegouB);
+
+    struct Caso { std::string nome; long long obtido; long long esperado; };
+    std::vector<Caso> casos;
+    casos.push_back({"os dois se encontram no corredor (premissa)", juntos > 0 ? 1 : 0, 1});
+    casos.push_back({"um desvio foi inserido (bit 2 da ordem)", insercoes > 0 ? 1 : 0, 1});
+    casos.push_back({"... na vaga -1 (ordem de um ponto so)", vaga > 0 ? 1 : 0, 1});
+    casos.push_back({"todo desvio inserido foi alcancado", chegadas == insercoes ? 1 : 0, 1});
+    casos.push_back({"... e em cada um, parado 32 tiques na casa do desvio", pausasOk == chegadas ? 1 : 0, 1});
+    casos.push_back({"os dois chegam ao destino", (chegouA >= 0 && chegouB >= 0) ? 1 : 0, 1});
+    casos.push_back({"no fim, nenhum desvio pendente",
+                     ((op2::g_units[a.id()].order.flags | op2::g_units[b.id()].order.flags) & 2u) ? 1 : 0, 0});
+    casos.push_back({"invariante: nunca os dois no mesmo tile", violacoes, 0});
+    if (violacoes) std::printf("[Desvio] primeira violacao: %s\n", primeira.c_str());
+
+    // A tabela de decisao, caso a caso. O cenario acima so passa pelo caminho
+    // feliz (la o bloqueador sempre esta entre passos e de frente); aqui o
+    // estado do bloqueador e montado a mao e o empurrao e chamado direto.
+    // Quem empurra fica a OESTE, andando para LESTE (dir 0): "de frente" e o
+    // proximo trecho do bloqueador ser OESTE (4).
+    {
+        const int ty = by + G + 2;
+        op2::Unit pu, bl;
+        op2::TethysGame::CreateUnit(pu, op2::mapCargoTruck, op2::LOCATION{x0, ty}, 0);
+        op2::TethysGame::CreateUnit(bl, op2::mapCargoTruck, op2::LOCATION{x0 + 1, ty}, 0);
+        const uint32_t destino = op2::packLocation(x0 - 6, ty);
+        struct Estado { const char* nome; int field22, velX, turnStep, prox, idx, flags, cur; bool desvia; };
+        const Estado tab[] = {
+            {"entre passos, de frente: desvia",              1, 0, 0, 4, 0, 1, 0, true},
+            {"entre passos, sem trecho restante: desvia",    1, 0, 0, 4, 1, 1, 0, true},
+            {"no meio de um passo (velocidade): nada",       1, 6, 0, 4, 0, 1, 0, false},
+            {"girando (passo de giro): nada",                1, 0, 1, 4, 0, 1, 0, false},
+            {"entre passos, mas indo para o norte: nada",    1, 0, 0, 6, 0, 1, 0, false},
+            {"entre passos, indo para o leste: nada",        1, 0, 0, 0, 0, 1, 0, false},
+            {"desvio ja pendente: nada",                     1, 0, 0, 4, 0, 3, 0, false},
+            {"sub-estado 2: nada",                           2, 0, 0, 4, 0, 1, 0, false},
+        };
+        for (const Estado& e : tab) {
+            op2::UnitRecord& r = op2::g_units[bl.id()];
+            r.hasOrder = true;
+            r.order.waypoints.assign(1, destino);
+            r.order.count = 1; r.order.countMinus1 = 0;
+            r.order.curWaypoint = e.cur; r.order.flags = static_cast<uint32_t>(e.flags);
+            r.order.detourSlot = 0;
+            r.field22 = static_cast<uint8_t>(e.field22);
+            r.velX = e.velX; r.velY = 0; r.turnStep = static_cast<int8_t>(e.turnStep);
+            r.stepTicks = 0;
+            r.routeDirs.assign(1, e.prox); r.routeIdx = e.idx;
+            const int px = r.pixelX, py = r.pixelY;
+            op2::debugPushAside(pu.id(), 0, bl.id());
+            const bool desviou = r.order.curWaypoint == e.cur - 1 && (r.order.flags & 2u) &&
+                                 !(e.flags & 2);
+            bool ok = desviou == e.desvia;
+            if (desviou) {
+                // o desvio cai na vaga -1, numa vizinha que NAO e a de quem empurra,
+                // o ponto antigo fica intacto, a rota e replanejada, e o
+                // bloqueador nao recebe passo nenhum (nada de empurrao direto)
+                const int dx = op2::unpackLocX(r.order.detourSlot), dy = op2::unpackLocY(r.order.detourSlot);
+                const bool vizinha = std::abs(dx - (x0 + 1)) <= 1 && std::abs(dy - ty) <= 1 &&
+                                     !(dx == x0 + 1 && dy == ty) && !(dx == x0 && dy == ty);
+                ok = ok && vizinha && r.order.waypoints[0] == destino && r.routeDirs.empty() &&
+                     r.pixelX == px && r.pixelY == py && !r.velX && !r.velY &&
+                     op2::g_gameMap.cellOccupant(x0 + 1, ty) == bl.id();
+                if (!ok) std::printf("[Desvio] %s: desvio em (%d,%d), ponto 0 %s, rota %d, vel %d/%d\n", e.nome,
+                                     dx, dy, r.order.waypoints[0] == destino ? "intacto" : "MEXIDO",
+                                     (int)r.routeDirs.size(), r.velX, r.velY);
+            } else if (!e.desvia) {
+                // nada mudou: nem ordem, nem bit, nem posicao, nem sub-estado
+                ok = ok && r.order.curWaypoint == e.cur && r.order.flags == static_cast<uint32_t>(e.flags) &&
+                     r.field22 == e.field22 && r.pixelX == px && r.pixelY == py;
+            }
+            casos.push_back({std::string("tabela: ") + e.nome, ok ? 1 : 0, 1});
+        }
+
+        // O desvio que fica INALCANCAVEL (alguem levanta uma parede na casa
+        // dele): o ponto e pulado (loc_44C16D) e o bit 2 sai junto -- corrigido
+        // em relacao ao original, que o deixava ligado ate o ponto seguinte.
+        {
+            op2::UnitRecord& r = op2::g_units[bl.id()];
+            r.hasOrder = true;
+            r.order = op2::OrderBlock{};
+            r.order.waypoints.assign(1, destino);
+            r.order.count = 1; r.order.countMinus1 = 0; r.order.curWaypoint = 0; r.order.flags = 1;
+            r.action = op2::CMD_MOVE; r.field20 = 1; r.field22 = 1;
+            r.velX = r.velY = 0; r.turnStep = 0; r.stepTicks = 0;
+            r.routeDirs.assign(1, 4); r.routeIdx = 0;
+            op2::debugPushAside(pu.id(), 0, bl.id());
+            const bool inserido = (r.order.flags & 2u) && r.order.curWaypoint == -1;
+            const int dx = op2::unpackLocX(r.order.detourSlot), dy = op2::unpackLocY(r.order.detourSlot);
+            op2::createWallOrTube(dx, dy, 0x12);
+            // Anda ate o bit sair (ou a ordem acabar). Sem a correcao, o bit so
+            // sai na chegada ao destino final -- com a parada de 32 la.
+            int tq = 0;
+            bool pausou = false;
+            for (; tq < 600 && r.hasOrder && (r.order.flags & 2u); ++tq) {
+                gs.onIdle(renderer, 0.2501f / 4.0f);
+                if (r.stepTicks == 0x20 && !r.velX && !r.velY) pausou = true;
+            }
+            const bool limpo = r.hasOrder && !(r.order.flags & 2u) && r.order.curWaypoint == 0 && !pausou;
+            std::printf("[Desvio] desvio murado em (%d,%d): bit %u, ponto %d, %s, em %d tiques%s\n", dx, dy,
+                        (r.order.flags >> 1) & 1u, r.order.curWaypoint, r.hasOrder ? "ordem viva" : "ordem acabou",
+                        tq, pausou ? ", COM a parada de 32" : "");
+            casos.push_back({"desvio inalcancavel: pulado, e o bit 2 sai junto", (inserido && limpo) ? 1 : 0, 1});
+        }
+    }
+
+    int ruins = 0;
+    for (const Caso& c : casos) {
+        const bool ok = c.obtido == c.esperado;
+        if (!ok) ++ruins;
+        std::printf("[Desvio] %-52s %lld (esperado %lld) %s\n", c.nome.c_str(), c.obtido, c.esperado,
+                    ok ? "ok" : "FALHOU");
+    }
+    std::printf("[Desvio] %d casos, %d falhas\n", (int)casos.size(), ruins);
+    renderer.shutdown();
+    SDL_Quit();
+    return ruins ? 1 : 0;
+}
+
 // --drawordertest <mapa>: a ORDEM de desenho do original (sub_49EA90 +
 // sub_49E8C0): predios e veiculos juntos, de cima para baixo no mapa (a lista
 // por Y); depois os efeitos com [+0x44] & 0x140; por ultimo os desastres
@@ -7161,6 +7393,8 @@ int main(int argc, char* argv[]) {
             return runMusicTest(argv[i + 1]);
         if (std::strcmp(argv[i], "--optmenutest") == 0 && i + 1 < argc)
             return runOptMenuTest(argv[i + 1]);
+        if (std::strcmp(argv[i], "--detourtest") == 0 && i + 1 < argc)
+            return runDetourTest(argv[i + 1]);
         if (std::strcmp(argv[i], "--drawordertest") == 0 && i + 1 < argc)
             return runDrawOrderTest(argv[i + 1], i + 2 < argc ? argv[i + 2] : "");
         if (std::strcmp(argv[i], "--artcliptest") == 0)

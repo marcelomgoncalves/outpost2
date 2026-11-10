@@ -12,6 +12,9 @@ void tickMovement();
 void moveDockArrive(int id);          // ações 3/4 no destino (giro + doca)
 // vt[0x7C] (sub_44B650) p/ um tile vizinho: monta o passo; false se não dá.
 bool unitStepToward(int id, int tx, int ty);
+// Só para o --detourtest: o empurrão (sub_44BBA0) chamado direto, com o estado
+// das duas unidades montado pelo teste.
+void debugPushAside(int pusherId, int dir, int blockerId);
 
 // loc_44B8F0 de sub_44B650: a unidade do computador armada de Laser/Microwave
 // que esbarra num tubo ou parede passa a mirar o TILE. Exposta porque e uma

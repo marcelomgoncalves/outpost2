@@ -78,6 +78,31 @@ void wallBlockTarget(UnitRecord& u, int nx, int ny) {
 // nao empurra.
 static int s_empurrando = 0;
 
+// sub_44BFD0: insere um DESVIO na ordem de quem está andando -- a casa
+// (tx, ty) passa a ser o ponto atual, e o ponto em que ele ia vira o seguinte.
+// O índice do ponto atual recua um e o desvio é gravado ali: com o índice em 0
+// ele cai na vaga −1 ([ordem+0x10]); com o índice maior, num ponto já visitado.
+// O bit 2 de [ordem+0x34] marca o desvio pendente: enquanto ligado, não entra
+// outro; quem o apaga é a chegada ao desvio (loc_44C1D2, em stepUnit).
+// O original, sem pontos (count == 0), faria do alvo [+0x50]/[+0x54] o 1º
+// ponto antes de recuar. No porte isso não ocorre: uma unidade sem ordem só
+// anda pelo passo único do unitStepToward, e no meio dele está com velocidade
+// -- e o pushAside não a trata como "andando entre passos".
+static bool insertDetour(int id, int tx, int ty, int mode) {
+    UnitRecord& u = g_units[id];
+    OrderBlock& ob = u.order;
+    if (!u.hasOrder || ob.waypoints.empty()) return false;   // (ver acima)
+    if (ob.flags & 2u) return false;                          // já há um desvio
+    ob.flags |= 2u;
+    if (ob.curWaypoint == -1) return false;                   // sem vaga (o bit fica)
+    --ob.curWaypoint;
+    const uint32_t wp = packLocation(tx, ty) | (static_cast<uint32_t>(mode) << 29);
+    if (ob.curWaypoint < 0) ob.detourSlot = wp;
+    else ob.waypoints[static_cast<size_t>(ob.curWaypoint)] = wp;
+    u.clearRoute();                                           // sub_44C2F0: replaneja
+    return true;
+}
+
 // sub_44BBA0: pede a `blockerId` que saia da frente de `pusherId`, que tentava
 // andar na direcao `dir` e achou a celula dele ocupada.
 //
@@ -92,18 +117,27 @@ static int s_empurrando = 0;
 // INTRANSITAVEL na direcao penalizada podia ganhar. Aqui bloqueada continua
 // bloqueada.
 //
-// So o ramo do bloqueador PARADO (sub-estado 0) esta portado. Se ele estiver
-// andando ([+0x22] == 1) e vindo de frente, o original insere um ponto de
-// passagem na frente da ordem dele (sub_44BFD0); esse ramo depende de partes
-// do bloco de ordem ainda nao decodificadas (com o indice em 0 a escrita cai
-// em [ordem+0x10]) e fica de fora -- quem empurra espera e, em 20, replaneja.
+// Dois ramos. Bloqueador PARADO ([+0x22] == 0): recebe a ordem de ir para a
+// casa escolhida (vt[0x7C]). Bloqueador ANDANDO ([+0x22] == 1): só se estiver
+// ENTRE dois passos -- [st+0x58]/[st+0x5C]/[st+0x60] (velX, velY e o passo de
+// giro) zerados -- e vindo DE FRENTE: o próximo trecho da rota dele
+// ([st+0x7C + idx]) é a direção oposta, rumo a quem empurra, ou não há mais
+// trecho. Aí recebe um DESVIO na ordem (sub_44BFD0), vai para a casa
+// escolhida, para 32 tiques e retoma o caminho. Qualquer outro sub-estado,
+// nada.
 static void pushAside(int pusherId, int dir, int blockerId) {
     if (blockerId <= 0 || blockerId >= static_cast<int>(g_units.size())) return;
     UnitRecord& b = g_units[blockerId];
     if (b.id == -1 || (b.flags & UNIT_DEAD)) return;
-    if (b.field22 != 0) return;                  // andando (sub_44BFD0) ou ocupado
-    const UnitRecord& p = g_units[pusherId];
     const int oposta = (dir + 4) & 7;            // [esp+var_2C]
+    if (b.field22 == 1) {
+        if (b.velX || b.velY || b.turnStep) return;           // no meio de um passo
+        if (b.routeIdx < static_cast<int>(b.routeDirs.size()) &&
+            (b.routeDirs[static_cast<size_t>(b.routeIdx)] & 7) != oposta) return;   // não vem de frente
+    } else if (b.field22 != 0) {
+        return;
+    }
+    const UnitRecord& p = g_units[pusherId];
     // routeDirs[idx+1] de quem empurra ([ecx+eax+7Dh]), se houver.
     const int proxima = (p.routeIdx + 1 < static_cast<int>(p.routeDirs.size()))
                             ? (p.routeDirs[p.routeIdx + 1] & 7) : -1;
@@ -123,11 +157,17 @@ static void pushAside(int pusherId, int dir, int blockerId) {
     }
     pfPop();                                     // sub_438200
     if (melhor == PF_BLOCKED) return;
+    if (b.field22 == 1) {                        // andando: o desvio (sub_44BFD0)
+        insertDetour(blockerId, mx, my, 0);
+        return;
+    }
     ++s_empurrando;
     unitStepToward(blockerId, mx, my);           // vt[0x7C] (sub_44C350)
     --s_empurrando;
     b.field22 = 1;                               // incondicional, como no original
 }
+
+void debugPushAside(int pusherId, int dir, int blockerId) { pushAside(pusherId, dir, blockerId); }
 
 // Monta o passo na direção `dir` — sub_44B650. Retorna false se o passo não
 // pode ser dado (a rota é descartada e recalculada).
@@ -243,11 +283,17 @@ bool unitStepToward(int id, int tx, int ty) {
     return false;
 }
 
+// O ponto `i` da ordem: o vetor começa em [ordem+0x14], e o índice −1 cai em
+// [ordem+0x10] -- a vaga do desvio (ver sub_44BFD0 / insertDetour).
+static uint32_t wpAt(const OrderBlock& ob, int i) {
+    return i < 0 ? ob.detourSlot : ob.waypoints[static_cast<size_t>(i)];
+}
+
 // sub_44C2F0: objetivo da busca p/ o waypoint atual [ordem+8]. O último usa o
 // modo/distância do bloco ([ordem+0x3C]/[+0x40]); os intermediários usam os
 // bits 29-31 do ponto (0 = célula exata; n>0 = modo 1, chegar a até n tiles).
 static void waypointGoal(const OrderBlock& ob, int& x, int& y, int& mode, int& dist) {
-    const uint32_t wp = ob.waypoints[ob.curWaypoint];
+    const uint32_t wp = wpAt(ob, ob.curWaypoint);
     x = unpackLocX(wp); y = unpackLocY(wp);
     if (ob.curWaypoint == ob.countMinus1) { mode = ob.multiFlag; dist = ob.field40; }
     else if (wp & 0xE0000000u) { mode = 1; dist = static_cast<int>(wp >> 29); }
@@ -261,7 +307,7 @@ static bool waypointAdvance(UnitRecord& u) {
     bool advanced = false;
     const int W = g_gameMap.ok() ? g_gameMap.width() * 32 : 0;
     while (ob.countMinus1 > ob.curWaypoint) {
-        const uint32_t wp = ob.waypoints[ob.curWaypoint];
+        const uint32_t wp = wpAt(ob, ob.curWaypoint);
         // pixelX/Y do port = canto do tile (o original guarda o centro, +16).
         int dx = u.pixelX - static_cast<int>(wp & 0x7FE0u);
         if (W) { if (dx < -W / 2) dx += W; else if (dx > W / 2) dx -= W; }
@@ -340,8 +386,19 @@ static void stepUnit(int id) {
                 g_units[id].hasOrder = false; g_units[id].order = OrderBlock{};
                 return;
             }
-            waypointAdvance(u);                          // sub_44BEC0
-            u.clearRoute();
+            const bool avancou = waypointAdvance(u);     // sub_44BEC0
+            u.clearRoute();                              // sub_44C2F0
+            // loc_44C1D2: se o ponto alcançado era um DESVIO (bit 2 de
+            // [ordem+0x34]), apaga o bit e fica 32 tiques parado -- um passo
+            // sem deslocamento ([st+0x64] = 0x20, velocidades e giro zerados) --,
+            // dando tempo para quem empurrou passar; depois retoma o caminho.
+            if ((ob.flags & 2u) && avancou) {
+                ob.flags &= ~2u;
+                u.stepTicks = 0x20;
+                u.turnStep = 0;
+                u.velX = u.velY = 0;
+                return;
+            }
             if (guard < 64) continue;
             u.field22 = 0; return;
         }
@@ -354,7 +411,16 @@ static void stepUnit(int id) {
             if (n > 0) u.pushWait = 0;                   // rota nova: [st+0x6C] = 0 (loc_44C1A0)
             if (n == 0) {
                 // loc_44C16D: sem rota p/ um ponto intermediário → o próximo.
-                if (ob.curWaypoint < ob.countMinus1 && guard < 64) { ++ob.curWaypoint; u.clearRoute(); continue; }   // sub_44C2F0
+                // Corrigido em relação ao original: com um DESVIO pendente, o
+                // ponto pulado é o próprio desvio (ele é sempre o ponto atual
+                // enquanto o bit 2 está ligado), e o bit 2 sai junto. O original
+                // o deixava ligado: a unidade fazia a parada de 32 tiques no
+                // ponto SEGUINTE, que nada tem a ver com o desvio, e não aceitava
+                // outro desvio até lá.
+                if (ob.curWaypoint < ob.countMinus1 && guard < 64) {
+                    ob.flags &= ~2u;
+                    ++ob.curWaypoint; u.clearRoute(); continue;   // sub_44C2F0
+                }
                 // sub_4401F0: as vizinhas enteráveis passam pela função de custo
                 // (objetivo = negativo) — uma vizinha-objetivo vira o próximo passo.
                 {

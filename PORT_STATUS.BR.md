@@ -48,7 +48,7 @@ com o registro de `src/mission/op2_api.cpp`.
 
 ```
 src/
-  main.cpp        entrada + os 109 modos de teste/captura
+  main.cpp        entrada + os 110 modos de teste/captura
   app/            TApp, UIState, GameState (o jogo), ShellState, HUD,
                   as 6 abas do quadro, minimapa, globo, diálogos
   game/           a simulação: unidades, estruturas, movimento, pathfinder,
@@ -2058,13 +2058,10 @@ empurrado anda no **próprio** tique — ninguém empurra de dentro de um
 empurrão. O porte usa `unitStepToward`, que dá o passo na hora; uma trava
 reproduz o original: quem está sendo empurrado não empurra.
 
-### O que ficou de fora
+### O bloqueador em movimento
 
-O ramo do bloqueador **em movimento**, vindo de frente: o original insere um
-ponto de passagem na frente da ordem dele (`sub_44BFD0`). Com o índice do ponto
-atual em 0, o decremento leva a −1 e a escrita cai em `[ordem+0x10]`, antes do
-vetor — depende de partes do bloco de ordem ainda não decodificadas. Sem ele,
-quem empurra espera e, em 20, replaneja.
+O ramo do bloqueador **andando**, vindo de frente — o desvio inserido na ordem
+dele (`sub_44BFD0`) — ficou para a seção **5.27**, portado no mesmo dia.
 
 ### O teste — `--pushtest <mapa>`
 
@@ -2247,6 +2244,94 @@ lista B, **4**.
 > depois de alguns tiques ativos, então o caso deixa o jogo andar até o desastre
 > aparecer e só então congela.
 
+## 5.27. Quem vem de frente dá passagem — o desvio (2026-11-10)
+
+Pedido: portar o caso que a 5.24 deixou de fora — o bloqueador **andando**.
+
+### O que o original faz (`sub_44BBA0`, ramo `[+0x22] == 1`)
+
+Quando quem empurra acha na célula da frente uma unidade que também está
+andando, ela só é desviada se estiver:
+
+- **entre dois passos** — `[st+0x58]`, `[st+0x5C]` e `[st+0x60]` (as duas
+  velocidades e o passo de giro) zerados; no meio de um passo, nada;
+- **vindo de frente** — o próximo trecho da rota dela (`[st+0x7C + idx]`) é a
+  direção oposta, `(dir + 4) & 7`, rumo a quem empurra; ou não há mais trecho.
+
+A casa escolhida é a mesma do empurrão do parado (as 7 vizinhas, com a
+penalidade de 1,5× — ver 5.24). Só que, em vez de uma ordem nova, ela recebe um
+**desvio** na ordem que já tem: `sub_44BFD0(casaX*32, casaY*32, 0)`. Qualquer
+outro sub-estado: nada.
+
+### O desvio na ordem (`sub_44BFD0`)
+
+| passo | |
+|---|---|
+| bit 2 de `[ordem+0x34]` ligado | sai: já há um desvio pendente |
+| liga o bit 2 | |
+| sem pontos (`count == 0`) | o alvo `[+0x50]/[+0x54]` vira o 1º ponto |
+| índice atual `[ordem+8] == −1` | sai (o bit fica) |
+| recua o índice e grava a casa ali | o ponto em que ia vira o seguinte |
+| `sub_44C2F0` | replaneja |
+
+Com o índice em 0 — a ordem comum, de um ponto só — o recuo leva a **−1** e a
+escrita cai em `[ordem+0x10]`, logo antes do vetor de pontos (`[ordem+0x14]`).
+Não é estouro: é uma vaga de propósito, e o teste do −1 impede de passar dela.
+`sub_44BEC0` (avanço) e `sub_44C2F0` (objetivo) leem
+`[ordem + idx*4 + 0x14]`, então alcançam a vaga também. No porte, a vaga é
+`OrderBlock::detourSlot`, e `wpAt` lê o ponto `i` com ela.
+
+O caso sem pontos não ocorre no porte: uma unidade sem ordem só anda pelo passo
+único do `unitStepToward`, e no meio dele tem velocidade — não está "entre
+passos".
+
+### A chegada ao desvio (`loc_44C1D2`, em `sub_44C0B0`)
+
+Ao alcançar um ponto, depois de `sub_44BEC0` (avança) e `sub_44C2F0`: se o
+bit 2 está ligado **e** houve avanço, apaga o bit e fica **32 tiques** parado —
+um passo sem deslocamento (`[st+0x64] = 0x20`, velocidades e giro zerados) —,
+dando tempo a quem empurrou para passar. Depois retoma o ponto em que ia.
+
+### Corrigido em relação ao original
+
+Se o desvio fica inalcançável (alguém para ou levanta um muro na casa dele), o
+ponto é pulado (`loc_44C16D`: `inc [ordem+8]`) — mas o bit 2 **ficava
+ligado**. A unidade fazia a parada de 32 tiques no ponto **seguinte**, que
+nada tem a ver com o desvio, e não aceitava outro desvio até lá. Enquanto o bit
+está ligado o desvio é sempre o ponto atual, então o pulo é sempre o dele:
+aqui o bit sai junto.
+
+### O teste — `--detourtest <mapa>`
+
+Dois caminhões, cada um com ordem de mover dada pelo clique direito, um contra
+o outro através de um **corredor** de 13 casas (quatro linhas de muro de cada
+lado e um nicho de uma casa embaixo, no meio). A cada tique, a invariante da
+5.24: dois em repouso nunca no mesmo tile, e a ocupação sob cada um aponta
+para ele.
+
+1. **O encontro.** Os dois ficam juntos no corredor por 305 tiques; um deles
+   recebe **um** desvio, na vaga −1, para o **nicho**; chega lá, fica 32 tiques
+   parado na casa do desvio, e os dois chegam ao destino (t=525 e t=474).
+2. **A tabela de decisão**, com o estado do bloqueador montado à mão e o
+   empurrão chamado direto: entre passos e de frente → desvia; sem trecho
+   restante → desvia; com velocidade, girando, indo para o norte, indo para o
+   leste, com desvio já pendente, ou noutro sub-estado → nada muda. Quando
+   desvia: a casa é vizinha e não é a de quem empurra, o ponto antigo fica
+   intacto, a rota é refeita e o bloqueador não ganha passo nenhum.
+3. **O desvio inalcançável:** um muro na casa do desvio. O ponto é pulado e o
+   bit sai junto, em 26 tiques, sem parada; sem a correção, o bit só saía na
+   chegada ao destino final, 120 tiques depois.
+
+Neutralizando, uma peça de cada vez: sem chamar o desvio **5** falhas; sem a parada de 32 **1**; sem o teste de "entre passos" **2**; sem o teste de "de frente" **2**; a vaga −1 ignorada (lendo sempre o ponto 0) **1**; o bit 2 nunca apagado **1**; o índice sem recuar **6**; sem replanejar ao inserir **2**; o andando empurrado como se estivesse parado **5**; o desvio pulado deixando o bit ligado, como no original, **1**. Sobrevive uma: a parada sem exigir o avanço — com o bit ligado, chegar a um ponto intermediário sem avançar não acontece, porque o desvio é sempre o ponto atual e a chegada a ele sempre avança.
+
+> Três armadilhas do teste, e nenhuma era defeito: (1) em campo aberto não há
+> encontro — um veículo andando custa 4× no planejador e os dois se contornam;
+> (2) com partida e destino na mesma linha, a rota de cada um passava pela casa
+> onde o outro estava parado, e os dois davam a volta por fora do corredor —
+> agora partem e chegam em diagonal; (3) o encontro só passa pelo caminho
+> feliz (lá o bloqueador está sempre entre passos e de frente): as mutações que
+> tiravam esses dois testes sobreviviam a ele, e por isso existe a tabela.
+
 ---
 
 ## 6. Build e execução
@@ -2294,6 +2379,7 @@ São 109 modos. Os que cobrem regressão de verdade:
 | `--pushtest <mapa>` | o veículo parado sai da frente: a doca, a regra da arma, o encurralado, e a invariante de ocupação a cada tique |
 | `--artcliptest` | o recorte por pedaço dos sprites: a carga da doca cortada na borda do poço, contra a composição crua |
 | `--drawordertest <mapa>` | a ordem de desenho: veículo atrás de prédio, efeitos por cima, desastres por último, a doca |
+| `--detourtest <mapa>` | quem vem de frente dá passagem: o encontro no corredor, a tabela de decisão do `sub_44BBA0` e o desvio inalcançável |
 | `--missiontest <DLL> <saida> <ticks>` | carrega e roda qualquer missão |
 | `--aitest <DLL campanha> <DLL multi>` | o `AILevel` chega ao jogador 0 e o multijogador fica intacto |
 | `--helptest [tópico]` | o leitor do `.HLP` e a navegação da tela do manual |

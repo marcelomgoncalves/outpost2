@@ -27,6 +27,13 @@ details of each one are in [PORT_STATUS.BR.md](PORT_STATUS.BR.md)
 
 **Corrigido**
 
+- **Quem vem de frente dá passagem.** Dois veículos que se encontram de frente
+  num caminho estreito não ficam mais esperando um pelo outro: o que está entre
+  dois passos recebe um desvio para uma casa ao lado, espera ali um instante e
+  retoma o caminho, como no original. Antes o porte deixava os dois parados até
+  desistirem e procurarem outra rota. De quebra, um defeito do original
+  corrigido: se a casa do desvio fica bloqueada, o veículo não faz mais uma
+  parada à toa no ponto seguinte do caminho.
 - **O veículo parado sai da frente.** Um caminhão — ou qualquer veículo —
   parado na doca, ou no caminho de outro, agora é empurrado para uma casa
   vizinha quando o outro precisa passar, como no original. Antes o porte
@@ -49,9 +56,9 @@ details of each one are in [PORT_STATUS.BR.md](PORT_STATUS.BR.md)
   ser empurrado. Isso também muda, um pouco, como as unidades contornam
   inimigos.
 
-**Para quem acompanha o código:** seções 5.23 a 5.26 do PORT_STATUS; quatro
-modos de teste novos — `--autoroutetest`, `--pushtest`, `--artcliptest` e
-`--drawordertest`.
+**Para quem acompanha o código:** seções 5.23 a 5.27 do PORT_STATUS; cinco
+modos de teste novos — `--autoroutetest`, `--pushtest`, `--artcliptest`,
+`--drawordertest` e `--detourtest`.
 
 ### English
 
@@ -68,6 +75,13 @@ modos de teste novos — `--autoroutetest`, `--pushtest`, `--artcliptest` e
 
 **Fixed**
 
+- **Whoever comes head-on gives way.** Two vehicles meeting head-on in a
+  narrow passage no longer just wait for each other: the one between two steps
+  gets a detour to a side tile, waits there a moment and carries on, as in the
+  original. The port used to leave both standing until they gave up and looked
+  for another route. Also, a defect of the original fixed: if the detour tile
+  gets blocked, the vehicle no longer makes a pointless stop at the next point
+  of its path.
 - **A parked vehicle gets out of the way.** A truck — or any vehicle — parked
   on a dock, or in another unit's path, is now pushed to a neighbouring tile
   when the other one needs to pass, as in the original. The port used to let
@@ -89,6 +103,6 @@ modos de teste novos — `--autoroutetest`, `--pushtest`, `--artcliptest` e
   armed blocks, unarmed can be pushed. This also slightly changes how units
   route around enemies.
 
-**For those following the code:** sections 5.23 to 5.26 of PORT_STATUS; four
-new test modes — `--autoroutetest`, `--pushtest`, `--artcliptest` and
-`--drawordertest`.
+**For those following the code:** sections 5.23 to 5.27 of PORT_STATUS; five
+new test modes — `--autoroutetest`, `--pushtest`, `--artcliptest`,
+`--drawordertest` and `--detourtest`.
