@@ -113,6 +113,10 @@ struct GameSettings {
     // left/right edges; only "around the world" maps (512 tiles wide) wrap.
     // 1 = every map wraps horizontally (the port's old behaviour).
     int mapWrap = 0;
+    // Fork: "ShowBottomRow". 0 = like the original: the view stops at the
+    // bottom of the map's clip rect, so the map's last tile row is hidden.
+    // 1 = the view can scroll down to show that row.
+    int showBottomRow = 0;
 
     // [WindowInfo]
     int miniMapButtons = 0;

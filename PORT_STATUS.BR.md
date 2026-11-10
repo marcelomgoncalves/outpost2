@@ -135,6 +135,7 @@ preferências; o original ignora chaves que não conhece.
 | `Fullscreen` | 0/1 | 1 | Abre em tela cheia (sem troca de modo de vídeo). Alt+Enter alterna a qualquer momento, e dentro do jogo há o par de rádio **Screen Mode** no fim da lista do `PREFERENCES` (ver 5.8). |
 | `MenuSkin` | 0/1 | 0 | Estilo dos menus. 0 = o visual do próprio porte (painéis azul-escuros, menu principal à direita); 1 = a pele de diálogo do OP2 original (fundo "blueprint", molduras vermelhas, texto verde, arte do `OP2SHRES.DLL`). |
 | `MapWrap` | 0/1 | 0 | Volta horizontal do mapa. 0 = como no original: a vista para nas bordas esquerda/direita do mapa, e só os mapas "around the world" (512 tiles de largura) dão a volta; 1 = todo mapa dá a volta (o comportamento antigo do porte). |
+| `ShowBottomRow` | 0/1 | 0 | Última linha de tiles do mapa. 0 = como no original: a vista para no fundo do clip rect do mapa, e a última linha fica escondida; 1 = a vista pode descer até mostrá-la. |
 
 ---
 

@@ -172,9 +172,10 @@ outpost2_modern.exe                      # main menu
 outpost2_modern.exe --game eden01.map    # opens a map directly
 ```
 
-The game's `OUTPOST2.INI` file is respected. The port adds seven keys the
-original doesn't have — AI level, night darkness, volume, demo camera and
-fullscreen; they are documented in `PORT_STATUS.EN.md`.
+The game's `OUTPOST2.INI` file is respected. The port adds eight keys the
+original doesn't have — AI level, night darkness, volume, demo camera,
+fullscreen, the menu skin (`MenuSkin`), horizontal map wrap (`MapWrap`) and
+the map's bottom row (`ShowBottomRow`); they are documented in `PORT_STATUS.EN.md`.
 
 There are **105 command-line modes** for tests and captures, among them a
 regression battery (`--savetest` proves save/reload determinism). The list is
@@ -231,6 +232,13 @@ PBMP tilesets, the `op2_art` sprites, the data sheets and the `.ANI` cursors.
 ---
 
 ## Recent changes
+
+### 2026-11-10
+
+- **The map's bottom row is hidden**, as in the original: the view stops at
+  the bottom of the map's clip rect (`height - 2` on the stock maps), so the
+  last tile row is never on screen. `ShowBottomRow=1` in `OUTPOST2.INI` lets
+  the view scroll down to it.
 
 ### 2026-11-08
 

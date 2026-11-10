@@ -173,10 +173,10 @@ outpost2_modern.exe                      # menu principal
 outpost2_modern.exe --game eden01.map    # abre um mapa direto
 ```
 
-O arquivo `OUTPOST2.INI` do jogo é respeitado. O porte acrescenta sete chaves
+O arquivo `OUTPOST2.INI` do jogo é respeitado. O porte acrescenta oito chaves
 que o original não tem — nível da IA, escuridão da noite, volume, câmera do
-demo, tela cheia, a pele dos menus (`MenuSkin`) e a volta horizontal do mapa
-(`MapWrap`); estão documentadas no `PORT_STATUS.BR.md`.
+demo, tela cheia, a pele dos menus (`MenuSkin`), a volta horizontal do mapa
+(`MapWrap`) e a última linha do mapa (`ShowBottomRow`); estão documentadas no `PORT_STATUS.BR.md`.
 
 Há **105 modos de linha de comando** para testes e capturas, entre eles uma
 bateria de regressão (`--savetest` prova o determinismo de salvar/recarregar).
@@ -234,6 +234,13 @@ cursores `.ANI`.
 ---
 
 ## Mudanças recentes
+
+### 2026-11-10
+
+- **A última linha do mapa fica escondida**, como no original: a vista para
+  no fundo do clip rect do mapa (`altura - 2` nos mapas do jogo), então a
+  última linha de tiles nunca aparece. `ShowBottomRow=1` no `OUTPOST2.INI`
+  deixa a vista descer até ela.
 
 ### 2026-11-08
 

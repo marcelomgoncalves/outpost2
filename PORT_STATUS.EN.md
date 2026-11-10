@@ -155,6 +155,7 @@ preferences screen; the original ignores keys it doesn't know.
 | `Fullscreen` | 0/1 | 1 | Opens fullscreen (no video mode change). Alt+Enter toggles at any time, and in game there is the **Screen Mode** radio pair at the end of the `PREFERENCES` list (see 5.8 in the BR status). |
 | `MenuSkin` | 0/1 | 0 | Menu style. 0 = the port's own look (dark-blue panels, main menu on the right); 1 = the original OP2 dialog skin (blueprint background, red frames, green text, art from `OP2SHRES.DLL`). |
 | `MapWrap` | 0/1 | 0 | Horizontal map wrap. 0 = as in the original: the view stops at the left/right edges of the map, and only "around the world" maps (512 tiles wide) wrap; 1 = every map wraps (the port's old behaviour). |
+| `ShowBottomRow` | 0/1 | 0 | Map's last tile row. 0 = as in the original: the view stops at the bottom of the map's clip rect, so the last row is hidden; 1 = the view can scroll down to show it. |
 
 ---
 
