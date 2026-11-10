@@ -48,7 +48,7 @@ com o registro de `src/mission/op2_api.cpp`.
 
 ```
 src/
-  main.cpp        entrada + os 107 modos de teste/captura
+  main.cpp        entrada + os 108 modos de teste/captura
   app/            TApp, UIState, GameState (o jogo), ShellState, HUD,
                   as 6 abas do quadro, minimapa, globo, diálogos
   game/           a simulação: unidades, estruturas, movimento, pathfinder,
@@ -2096,6 +2096,85 @@ invertido de novo **5**; sem a trava **2**; o contador sem zerar na rota nova
 
 ---
 
+## 5.25. O recorte por pedaço dos sprites — a carga que "entra" na doca (2026-11-10)
+
+Pedido: *quando o caminhão atraca para depositar, a parte que desce para dentro
+da construção aparece; ela deveria ficar oculta.*
+
+### O que se via
+
+Capturando a atracagem quadro a quadro: o caminhão abre o poço da doca (um
+quadrado escuro do tamanho de um tile, que **faz parte do sprite do próprio
+caminhão**), e o braço que leva a carga desce **atravessando a borda de baixo do
+poço**, pintado por cima do terreno. Nos funis laterais, o mesmo: saíam pelos
+lados do poço.
+
+### O mecanismo (`sub_403E00`)
+
+Não era ordem de desenho nem a arte. É um recurso do formato `op2_art.prt`:
+**recorte por pedaço**. No blitter, para cada pedaço (imagem) de um quadro:
+
+- os bits **5..9** do `type` da imagem são um índice `k`;
+- se `k != 0`, o pedaço só é desenhado dentro do **retângulo `k` da animação**
+  (`unk_50B374[anim*7 + k]`, 16 bytes, um RECT), relativo ao hotspot e
+  **intersectado** com o recorte da tela — que é salvo antes e restaurado
+  depois.
+
+Na doca (animações 497 e 486, por exemplo), o recorte 2 é **(12,5)–(41,38)**:
+o interior do poço. O braço (`img 254`, 12×33, que desce até y=63) e os funis
+(`img 229/230`) têm `k = 2`. No original, tudo o que sai do poço é cortado.
+
+O porte **já lia** esses retângulos (`ArtAnimation::clips`) e os usava no teste
+de clique (`pixelMiss`, `sub_404E30`) — o desenho é que os ignorava. Agora o
+`blitArtFrame` aplica o recorte de cada pedaço, com a mesma conta e o mesmo
+índice do teste de clique.
+
+### Onde mais isso vale
+
+**48 animações** usam o recorte, e nenhuma aponta para um retângulo que não
+existe: as docas do caminhão nas duas raças e nas duas fases (476–515), o
+caminhão carregando na mina (458/459), mais uma família de doca (355–358) e o
+**Magma Well** (1335/1336), cuja peça que desce no respiradouro também é
+cortada. Conferido renderizando cada família com e sem o recorte: só some o que
+sai do retângulo.
+
+### O teste — `--artcliptest`
+
+10 casos, cada um contra a **composição crua** da mesma animação (todos os
+pedaços inteiros) como controle:
+
+1. **Doca, fase 1, quadro 110:** cru, o braço passa 208 pixels abaixo do poço;
+   desenhado, **zero** — e, dentro do retângulo de recorte, o desenho é
+   **idêntico** ao cru, pixel a pixel (nada sumiu do que devia aparecer).
+2. **Doca, fase 2, quadro 60:** cru, o funil sai 114 pixels pela lateral;
+   desenhado, zero.
+3. **Uma animação sem pedaço marcado sai idêntica à crua** em todos os
+   quadros — o recorte não corta nada à toa.
+4. Todo `k` aponta para um retângulo da própria animação.
+
+Neutralizando: sem o recorte **2** falhas; o índice deslocado (`clips[k]`)
+**1**; o retângulo sem descontar o hotspot **2**; só o corte vertical **1**; o
+recorte aplicado também aos pedaços não marcados **1**.
+
+> Uma armadilha de diagnóstico: o `--animdump` decodifica as imagens **direto**,
+> sem passar pelo blitter, e o meu primeiro despejo parava no quadro 40 — a
+> animação tem 120. Por isso a primeira leitura dos quadros sugeria que a arte
+> não passava da borda. Foi a captura **no jogo**, com o caminhão atracado,
+> que mostrou o braço vazando.
+
+### Achado no caminho, **não** alterado: a ordem de desenho
+
+O original desenha prédios e veículos **numa passada só**, na ordem da lista de
+unidades, que `sub_43E7E0` mantém **ordenada por Y** (`[+0x18]`): é um
+*painter's algorithm*, e um veículo que passa **atrás** (ao norte) de um prédio
+alto é coberto por ele. O porte desenha **todos os prédios e depois todos os
+veículos** (`GameState::onIdle`, os "três passes"), então o veículo sempre sai
+por cima. Não era isso que mostrava o braço da doca — o caminhão atracado tem Y
+maior que o centro do prédio e sai por cima nas duas ordens —, e mudar a ordem
+mexe no visual do jogo inteiro. Fica registrado para decisão.
+
+---
+
 ## 6. Build e execução
 
 **Toolchain:** CMake >= 3.15 + MSVC, C++17, SDL2 2.30.9 (em `third_party/`).
@@ -2117,7 +2196,7 @@ missão e os recursos originais do diretório de trabalho).
 
 ### Testes por linha de comando
 
-São 107 modos. Os que cobrem regressão de verdade:
+São 108 modos. Os que cobrem regressão de verdade:
 
 | Modo | O que prova |
 |---|---|
@@ -2139,6 +2218,7 @@ São 107 modos. Os que cobrem regressão de verdade:
 | `--pausetest <DLL> [bmp]` | a pausa do `Ctrl+P`: o relógio para, o som suspende, o letreiro aparece, e em rede nada disso |
 | `--autoroutetest <mapa>` | a rota de minério automática: a fundição disponível mais próxima, as três minas, as duas raças, e o ciclo rodando |
 | `--pushtest <mapa>` | o veículo parado sai da frente: a doca, a regra da arma, o encurralado, e a invariante de ocupação a cada tique |
+| `--artcliptest` | o recorte por pedaço dos sprites: a carga da doca cortada na borda do poço, contra a composição crua |
 | `--missiontest <DLL> <saida> <ticks>` | carrega e roda qualquer missão |
 | `--aitest <DLL campanha> <DLL multi>` | o `AILevel` chega ao jogador 0 e o multijogador fica intacto |
 | `--helptest [tópico]` | o leitor do `.HLP` e a navegação da tela do manual |

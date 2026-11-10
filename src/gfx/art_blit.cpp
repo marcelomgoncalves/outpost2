@@ -1,5 +1,7 @@
 #include "art_blit.h"
 
+#include <algorithm>
+#include <array>
 #include <vector>
 
 #include "artfile.h"
@@ -60,15 +62,34 @@ bool blitArtFrame(uint32_t* fb, int fbW, int fbH, int animIdx, int frameIdx,
         const ArtImage& m = g_art.image(p.image);
         const bool shadow = m.isShadow();         // type&4: máscara de 1 bit por pixel
         if (shadow && !s_shadows) continue;      // sub_403E00: pula a sombra
+        // Recorte POR PEDAÇO (sub_403E00, loc_403ECC): os bits 5..9 do type da
+        // imagem são um índice k; se k != 0, o pedaço só é desenhado dentro do
+        // retângulo k da animação (`clips[k-1]`, o registro `unk_50B374[anim*7
+        // + k]`), relativo ao hotspot e intersectado com o recorte da tela. É
+        // o que esconde o que "entra" num prédio: na doca do caminhão, o braço
+        // que leva a carga para baixo é cortado na borda do poço. O mesmo
+        // retângulo o porte já usava no teste de clique (pixelMiss); o desenho
+        // o ignorava e pintava o pedaço inteiro.
+        int cx0 = clipX0, cy0 = clipY0, cx1 = clipX1, cy1 = clipY1;
+        const int k = (m.type & 0x3E0) >> 5;
+        if (k) {
+            const std::array<int32_t, 4> r = k - 1 < static_cast<int>(an.clips.size())
+                                                 ? an.clips[k - 1] : std::array<int32_t, 4>{0, 0, 0, 0};
+            cx0 = std::max(cx0, refX + r[0]);
+            cy0 = std::max(cy0, refY + r[1]);
+            cx1 = std::min(cx1, refX + r[2]);
+            cy1 = std::min(cy1, refY + r[3]);
+            if (cx0 >= cx1 || cy0 >= cy1) continue;
+        }
         g_art.decode(p.image, px, /*transparent*/ true, /*palOverride*/ -1, playerColor);
         for (uint32_t y = 0; y < m.height; ++y) {
             const int py = refY + p.y + static_cast<int>(y);
-            if (py < clipY0 || py >= clipY1) continue;
+            if (py < cy0 || py >= cy1) continue;
             for (uint32_t x = 0; x < m.width; ++x) {
                 const uint32_t c = px[y * m.width + x];
                 if (!(c >> 24)) continue;
                 const int pxs = refX + p.x + static_cast<int>(x);
-                if (pxs < clipX0 || pxs >= clipX1) continue;
+                if (pxs < cx0 || pxs >= cx1) continue;
                 uint32_t& d = fb[py * fbW + pxs];
                 if (shadow) {
                     // Sombra: escurece o fundo (~50%), não desenha a cor.

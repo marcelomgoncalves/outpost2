@@ -61,6 +61,7 @@
 #include "game/research_lab.h"
 #include "game/research.h"
 #include "gfx/artfile.h"
+#include "gfx/art_blit.h"
 #include "app/tapp.h"
 #include "app/game_state.h"
 #include "app/shell_state.h"
@@ -4349,6 +4350,164 @@ static int runBannerTest(const std::string& dll, const std::string& shot) {
     return ruins ? 1 : 0;
 }
 
+// --artcliptest: o RECORTE POR PEDACO do sub_403E00. Os bits 5..9 do type de
+// uma imagem sao um indice k; se k != 0, o pedaco so e desenhado dentro do
+// retangulo k da animacao. E o que esconde o que "entra" num predio: na doca
+// do caminhao, o braco que leva a carga para baixo e cortado na borda do poco.
+// O porte lia esses retangulos (o teste de clique os usava) mas o DESENHO os
+// ignorava -- o braco aparecia descendo por cima do terreno.
+//
+// Cada caso compara o blitArtFrame com a composicao CRUA da mesma animacao
+// (todos os pedacos inteiros), que serve de controle.
+static int runArtClipTest() {
+    if (!op2::g_ResManager.init(".")) return 2;
+    if (!op2::g_art.load()) return 3;
+    op2::setArtShadows(false);                      // sombra escurece o fundo: fora da conta
+    const int W = 128, H = 128, CX = 64, CY = 48;   // o hotspot cai em (CX, CY)
+    const uint32_t kFundo = 0xFF202020u;
+
+    // Pelo blitter de verdade.
+    const auto desenha = [&](int anim, int frame) {
+        std::vector<uint32_t> t((size_t)W * H, kFundo);
+        op2::blitArtFrame(t.data(), W, H, anim, frame, CX, CY, -1, 0, 0, W, H, 0);
+        return t;
+    };
+    // Crua: todos os pedacos inteiros, sem recorte nenhum (o controle).
+    const auto cru = [&](int anim, int frame) {
+        std::vector<uint32_t> t((size_t)W * H, kFundo);
+        const op2::ArtAnimation& A = op2::g_art.animation(anim);
+        const int rx = CX - (int)A.header[5], ry = CY - (int)A.header[6];
+        for (const op2::ArtPicture& pc : A.frames[frame].pics) {
+            const op2::ArtImage& m = op2::g_art.image(pc.image);
+            if (m.isShadow()) continue;
+            std::vector<uint32_t> px; op2::g_art.decode(pc.image, px, true);
+            for (uint32_t y = 0; y < m.height; ++y)
+                for (uint32_t x = 0; x < m.width; ++x) {
+                    const uint32_t c = px[y * m.width + x];
+                    if (!(c >> 24)) continue;
+                    const int X = rx + pc.x + (int)x, Y = ry + pc.y + (int)y;
+                    if (X < 0 || Y < 0 || X >= W || Y >= H) continue;
+                    t[(size_t)Y * W + X] = c | 0xFF000000u;
+                }
+        }
+        return t;
+    };
+    // Pixels pintados numa faixa [x0,x1) x [y0,y1).
+    const auto conta = [&](const std::vector<uint32_t>& t, int x0, int y0, int x1, int y1) {
+        int n = 0;
+        for (int y = std::max(0, y0); y < std::min(H, y1); ++y)
+            for (int x = std::max(0, x0); x < std::min(W, x1); ++x)
+                if (t[(size_t)y * W + x] != kFundo) ++n;
+        return n;
+    };
+
+    struct Caso { std::string nome; long long obtido; long long esperado; };
+    std::vector<Caso> casos;
+
+    // 1) Doca, fase 1 (anim 497 = 0x255 - 0x65), quadro 110: o braco (img 254,
+    //    12x33 em (21,30), k=2) desce ate y=63; o recorte 2 e o poco, (12,5)-(41,38).
+    {
+        const int anim = 497, q = 110;
+        const op2::ArtAnimation& A = op2::g_art.animation(anim);
+        const int ry = CY - (int)A.header[6];
+        // Abaixo da IMAGEM do poco (img 225, 32x32 em y=8: vai ate 39), nao do
+        // retangulo de recorte (que corta em 38): as duas ultimas linhas sao a
+        // moldura do poco, que nao tem recorte e tem de aparecer.
+        const int fundoPoco = ry + 8 + 32;
+        casos.push_back({"a doca tem o recorte 2, o poco (premissa)", (int)A.clips.size() >= 2 ? 1 : 0, 1});
+        const std::vector<uint32_t> b = desenha(anim, q), c = cru(anim, q);
+        const int abaixoCru = conta(c, 0, fundoPoco, W, H), abaixo = conta(b, 0, fundoPoco, W, H);
+        // Dentro do retangulo 2 (relativo ao hotspot), NADA pode ter sumido:
+        // o desenho tem de ser igual ao cru ali. Pega um recorte que esconda o
+        // pedaco inteiro, que use o retangulo errado ou que o desloque.
+        const int rx = CX - (int)A.header[5];
+        int dentroDif = 0, dentroBraco = 0;
+        if (A.clips.size() >= 2) {
+            const std::array<int32_t, 4>& r = A.clips[1];
+            for (int y = ry + r[1]; y < ry + r[3]; ++y)
+                for (int x = rx + r[0]; x < rx + r[2]; ++x) {
+                    const size_t i = (size_t)y * W + x;
+                    if (b[i] != c[i]) ++dentroDif;
+                    if (y >= ry + 30 && c[i] != kFundo) ++dentroBraco;
+                }
+        }
+        std::printf("[Clip] doca f1 q%d: abaixo do poco cru %d px, desenhado %d px; dentro do recorte %d px diferentes\n",
+                    q, abaixoCru, abaixo, dentroDif);
+        casos.push_back({"cru: o braco passa da borda do poco (premissa)", abaixoCru > 0 ? 1 : 0, 1});
+        casos.push_back({"desenhado: nada abaixo da borda do poco", abaixo, 0});
+        casos.push_back({"o braco esta dentro do recorte (premissa)", dentroBraco > 0 ? 1 : 0, 1});
+        casos.push_back({"... e dentro do recorte o desenho e igual ao cru", dentroDif, 0});
+    }
+
+    // 2) Doca, fase 2 (anim 486), quadro 60: os funis laterais (img 229/230,
+    //    10x30 em (7,9) e (37,9), k=2) saem do poco pelos lados. A direita do
+    //    poco (x >= 43, alem da borda dele, que vai ate 42) so ha funil.
+    {
+        const int anim = 486, q = 60;
+        const op2::ArtAnimation& A = op2::g_art.animation(anim);
+        const int rx = CX - (int)A.header[5], ry = CY - (int)A.header[6];
+        const std::vector<uint32_t> b = desenha(anim, q), c = cru(anim, q);
+        const int foraCru = conta(c, rx + 43, ry, W, ry + 40), fora = conta(b, rx + 43, ry, W, ry + 40);
+        std::printf("[Clip] doca f2 q%d: a direita do poco cru %d px, desenhado %d px\n", q, foraCru, fora);
+        casos.push_back({"cru: o funil sai pela lateral (premissa)", foraCru > 0 ? 1 : 0, 1});
+        casos.push_back({"desenhado: o funil fica dentro do poco", fora, 0});
+    }
+
+    // 3) Sem pedaco marcado, NADA muda: o caminhao andando (anim de movimento,
+    //    sem recorte) sai identico a composicao crua. Procura uma animacao de
+    //    veiculo sem k em nenhum pedaco e compara todos os quadros.
+    {
+        int alvo = -1;
+        for (int a = 0; a < op2::g_art.numAnimations() && alvo < 0; ++a) {
+            const op2::ArtAnimation& A = op2::g_art.animation(a);
+            if (A.frames.size() < 4) continue;
+            bool algum = false;
+            for (const op2::ArtFrame& F : A.frames)
+                for (const op2::ArtPicture& pc : F.pics)
+                    if (op2::g_art.image(pc.image).type & 0x3E0) algum = true;
+            if (!algum && a > 100) alvo = a;
+        }
+        int diferentes = 0;
+        if (alvo >= 0) {
+            const op2::ArtAnimation& A = op2::g_art.animation(alvo);
+            for (int q = 0; q < (int)A.frames.size(); ++q) {
+                const std::vector<uint32_t> b = desenha(alvo, q), c = cru(alvo, q);
+                for (size_t i = 0; i < b.size(); ++i) if (b[i] != c[i]) ++diferentes;
+            }
+        }
+        std::printf("[Clip] sem recorte: anim %d, %d pixels diferentes do cru\n", alvo, diferentes);
+        casos.push_back({"achou uma animacao sem recorte (premissa)", alvo >= 0 ? 1 : 0, 1});
+        casos.push_back({"sem pedaco marcado, desenho = cru", diferentes, 0});
+    }
+
+    // 4) Nenhuma animacao aponta para um retangulo que nao existe.
+    {
+        int fora = 0, usam = 0;
+        for (int a = 0; a < op2::g_art.numAnimations(); ++a) {
+            const op2::ArtAnimation& A = op2::g_art.animation(a);
+            bool usa = false;
+            for (const op2::ArtFrame& F : A.frames)
+                for (const op2::ArtPicture& pc : F.pics) {
+                    const int k = (op2::g_art.image(pc.image).type & 0x3E0) >> 5;
+                    if (k) { usa = true; if (k > (int)A.clips.size()) ++fora; }
+                }
+            if (usa) ++usam;
+        }
+        std::printf("[Clip] %d animacoes usam recorte\n", usam);
+        casos.push_back({"todo k aponta para um retangulo da animacao", fora, 0});
+    }
+
+    int ruins = 0;
+    for (const Caso& c : casos) {
+        const bool ok = c.obtido == c.esperado;
+        if (!ok) ++ruins;
+        std::printf("[Clip] %-52s %lld (esperado %lld) %s\n", c.nome.c_str(), c.obtido, c.esperado,
+                    ok ? "ok" : "FALHOU");
+    }
+    std::printf("[Clip] %d casos, %d falhas\n", (int)casos.size(), ruins);
+    return ruins ? 1 : 0;
+}
+
 // --pushtest <mapa>: o veiculo PARADO no caminho sai da frente (sub_44B650 ->
 // sub_44BD60 -> sub_44BBA0). O caso do pedido: uma fundicao com um caminhao
 // estacionado na doca e outro mandado atracar ali. O porte entrava na celula
@@ -6801,6 +6960,8 @@ int main(int argc, char* argv[]) {
             return runMusicTest(argv[i + 1]);
         if (std::strcmp(argv[i], "--optmenutest") == 0 && i + 1 < argc)
             return runOptMenuTest(argv[i + 1]);
+        if (std::strcmp(argv[i], "--artcliptest") == 0)
+            return runArtClipTest();
         if (std::strcmp(argv[i], "--pushtest") == 0 && i + 1 < argc)
             return runPushTest(argv[i + 1]);
         if (std::strcmp(argv[i], "--autoroutetest") == 0 && i + 1 < argc)
