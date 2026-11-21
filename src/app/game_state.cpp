@@ -956,7 +956,9 @@ void GameState::onIdle(Renderer& renderer, float dt) {
     }
     // Minimapa segurado (sub_4587B0 → sub_41F9E0): relê o cursor e centra a vista.
     if (m_miniDrag) {
-        if (!(SDL_GetMouseState(nullptr, nullptr) & SDL_BUTTON(SDL_BUTTON_LEFT))) {
+        const Uint32 botoes = m_harnessButtons >= 0 ? static_cast<Uint32>(m_harnessButtons)
+                                                    : SDL_GetMouseState(nullptr, nullptr);
+        if (!(botoes & SDL_BUTTON(SDL_BUTTON_LEFT))) {
             m_miniDrag = false;
         } else {
             int px, py;
@@ -1948,6 +1950,51 @@ void GameState::debugMouse(Renderer& r, int wx, int wy, int button, bool down, b
     ev.button.x = sx; ev.button.y = sy;
     handleEvent(r, ev);
     SDL_SetModState(KMOD_NONE);
+}
+
+bool GameState::harnessUiCenter(const std::string& name, int& nx, int& ny) const {
+    auto lower = [](std::string s) {
+        std::string o;
+        for (char c : s) if (c != '&') o += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return o;
+    };
+    const std::string n = lower(name);
+    if (n.size() == 4 && n.compare(0, 3, "tab") == 0 && n[3] >= '0' && n[3] <= '5') {
+        PaneRect r;
+        if (!tabRect(n[3] - '0', r)) return false;
+        nx = (r.l + r.r) / 2; ny = (r.t + r.b) / 2;
+        return true;
+    }
+    if (n.size() == 8 && n.compare(0, 7, "minimap") == 0 && n[7] >= '0' && n[7] <= '3') {
+        const int k = n[7] - '0';
+        if (k >= miniButtonCount()) return false;
+        nx = kColX + kColW / 2 - 0x20 + 16 * k + 8; ny = kMiniMapY + 8;   // os botoes de 16 px (miniToWorld)
+        return true;
+    }
+    std::string want = n;
+    for (char& c : want) if (c == '_') c = ' ';
+    if (want.empty()) return false;
+    for (const CmdButton& b : commandButtons())
+        if (lower(b.tip).find(want) != std::string::npos) { nx = (b.l + b.r) / 2; ny = (b.t + b.b) / 2; return true; }
+    for (const TextButton& b : structureButtons())
+        if (lower(b.tip).find(want) != std::string::npos || lower(b.label).find(want) != std::string::npos) {
+            nx = (b.l + b.r) / 2; ny = (b.t + b.b) / 2; return true;
+        }
+    return false;
+}
+
+std::vector<std::string> GameState::harnessUiList() const {
+    std::vector<std::string> out;
+    char buf[512];
+    for (const CmdButton& b : commandButtons()) {
+        std::snprintf(buf, sizeof(buf), "command (%d,%d)-(%d,%d) \"%s\"", b.l, b.t, b.r, b.b, b.tip.c_str());
+        out.push_back(buf);
+    }
+    for (const TextButton& b : structureButtons()) {
+        std::snprintf(buf, sizeof(buf), "command (%d,%d)-(%d,%d) \"%s\" \"%s\"", b.l, b.t, b.r, b.b, b.label.c_str(), b.tip.c_str());
+        out.push_back(buf);
+    }
+    return out;
 }
 
 void GameState::debugPrintCommandButtons() const {

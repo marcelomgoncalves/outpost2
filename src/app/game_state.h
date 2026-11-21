@@ -445,6 +445,13 @@ public:
     bool debugGlobeRoundTrip(int wx, int wy, int& sx, int& sy, int& bx, int& by) const {
         return m_globe.project(wx, wy, sx, sy) && m_globe.unproject(sx, sy, bx, by);
     }
+    // --harness (entrada do OP2TestHarness): os botoes do mouse que o harness segura (o
+    // arrasto do minimapa le o mouse de verdade; -1 = o de verdade), o ponto do minimapa
+    // e os alvos `ui`: "tabN", "minimapN" ou parte da dica/rotulo de um botao.
+    void debugMouseButtons(int mask) { m_harnessButtons = mask; }
+    bool harnessMiniToWorld(int nx, int ny, int& px, int& py) const { return miniToWorld(nx, ny, px, py); }
+    bool harnessUiCenter(const std::string& name, int& nx, int& ny) const;
+    std::vector<std::string> harnessUiList() const;
     void debugAreaDrag(int cmd) {            // só p/ --placeshot: arrasto de 3 tiles
         m_targetCmd = cmd; m_areaDrag = true;
         m_areaSX = m_camX + m_mouseNX - kViewX - 96;
@@ -463,6 +470,7 @@ private:
     // Minimapa (sub_4583D0/sub_4587B0/sub_41F9E0): botão apertado nele = flags 1|4
     // de dword_57489C; enquanto segurado, a vista centra no ponto (sub_408120).
     bool m_miniDrag = false;
+    int m_harnessButtons = -1;     // --harness: os botoes segurados (-1 = o mouse de verdade)
     bool miniToWorld(int nx, int ny, int& px, int& py) const;   // sub_48D860 (zoom 0)       // arrastando a área de um comando (muro/terraplanar)
     int  m_areaSX = 0, m_areaSY = 0;   // início do arrasto (pixel do mundo)
     void areaRect(int ex, int ey, int& x1, int& y1, int& x2, int& y2) const;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <deque>
 #include <vector>
 
 #include "location.h"
@@ -336,6 +337,8 @@ int  unitListNext(int id);     // próximo (0 = fim)
 // sub_439B90 (parte do slot): libera o registro ([+0x04] = -1, [+0x08] = tick),
 // preservando [+0x32], e põe o slot no anel de livres.
 void unitFreeSlot(int id);
+// O anel de livres, do mais antigo ao mais novo (o trace do --harness: "alloc").
+const std::deque<int>& unitFreeRing();
 
 // Footprint (tamanho em tiles) de um prédio — X-size × Y-size de building.txt
 // (popula o descritor off_4E1340[+0x248/+0x24A] no original). Devolve 1×1 p/

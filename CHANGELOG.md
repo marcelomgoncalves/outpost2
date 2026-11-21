@@ -132,6 +132,79 @@ details of each one are in [PORT_STATUS.BR.md](PORT_STATUS.BR.md)
   lados). Na tela de preferências ela se chama **Wheel/Scroll Bars**.
   Desligada (o padrão), é o jogo original.
 
+- **O modo `--harness` roda os roteiros do OP2TestHarness quase por
+  inteiro.** O [OP2TestHarness](https://github.com/leviathan400/OP2TestHarness)
+  joga um cenário no jogo original e grava o que aconteceu; o `--harness` joga
+  o mesmo roteiro no porte, para comparar os dois. Antes o porte só conhecia
+  15 verbos e 89 dos 478 cenários do op2-rs paravam em verbos que ele não
+  tinha. Agora ele tem os de economia e de colônia (`beacon`, `tube`, `wall`,
+  `player`, `tech`, `mem`, `poke`, `route`, `produce`, `build`, `kit`, `bay`,
+  `cargo`, `transfercargo`, `load`/`unload`, `idle`/`unidle`, `train`,
+  `research`, `launch`), as obras (`doze`, `buildwall`, `removewall`), os
+  comandos com alvo (`repairobj`, `reprogram`, `dismantle`, `scatter`), os
+  desastres (`meteor`, `quake`, `eruption`, `lightning`, `tornado`, `blight`,
+  `empmissile`, `lavaspeed`, `lavapossible`, com o `now` que pula os avisos)
+  e os grupos de IA das missões (`group`). Cada um manda o mesmo pacote ou faz
+  a mesma chamada da API de missão que o harness faz no original. Fora ficam
+  só os de mouse e teclado (`click`, `drag`), que viram uma entrada real na
+  janela do jogo. Verbos que o próprio harness não conhece (`salvage`,
+  `groupmove`) dão o mesmo "unknown verb" de lá.
+
+- **O `--harness` grava a telemetria (`telemetry.jsonl`)**, como o
+  OP2TestHarness grava no original: com `--telemetry-every N`, uma linha no
+  tick 1, a cada N ticks e no fim, com a colônia de cada jogador (comida,
+  minério, população, moral, energia, prédios, tecnologias) e todos os prédios
+  e veículos (tipo, dono, tile, HP, comando). Com `--eco`, também a alocação
+  da colônia (trabalhadores e cientistas livres e exigidos, energia, comida,
+  capacidades, as entradas da moral), o estado de cada unidade (flags, ação e
+  seu tempo, carga do caminhão, doca) e os beacons de mineração. São os mesmos
+  nomes de campo e as mesmas coordenadas do original, para comparar os dois
+  campo a campo (167 cenários do op2-rs gravam a telemetria `--eco`). Os
+  campos que o porte não modela ficam de fora em vez de saírem como 0. E o
+  roteiro agora roda em ordem de tick, como no harness: uma linha do tick 1
+  listada depois de linhas de ticks maiores esperava por elas (em
+  `chaos_big_colony` a população só chegava no tick 17085).
+
+- **O trace do `--harness` (`trace.jsonl`) tem todos os campos do
+  OP2TestHarness.** Além da posição, direção, HP e arma, cada unidade traz
+  agora o comando e a ação (pelos nomes do original), a rota em curso (o
+  destino, o passo, a fração do pixel, a velocidade, os pontos e as direções
+  que faltam), os efeitos de EMP, espuma e ESG e as casas que ela ocupa. Cada
+  linha traz também os disparos das unidades do cenário, todos os outros
+  objetos vivos (explosões, animações, unidades que o roteiro não criou), o
+  alocador de objetos (o maior índice e o anel de livres) e as unidades mortas
+  cujo índice já é de outra. A primeira linha sai no tick 1, como no harness,
+  e o verbo `trace` grava uma na hora. Os nove cenários de referência seguem
+  iguais; nos duelos, todos os campos novos batem com o original em todo
+  tick.
+
+- **O `--harness` grava o `gamedata.json`**, os dados do jogo como carregados,
+  como o OP2TestHarness grava no original no primeiro ciclo: a geometria do
+  mapa, a velocidade de cada tipo de terreno por esteira, os atributos de cada
+  tipo de unidade (o bloco do jogador 0, o tamanho, a doca e o entulho dos
+  prédios, o raio e o alcance mínimo das armas), o tipo de cada casa do mapa e,
+  com `--eco`, as tabelas de moral, de minas e de pesquisa. Comparado com o
+  original, quase tudo bate; o que difere é do jogo: SCAT, BFG e os pacotes de
+  3 Spiders e 3 Scorpions sem atributos no porte, os nomes do tubo e dos
+  muros, e 49 casas do `cm01.map` (x 24..33, y 62..67) que no original são
+  intransponíveis.
+
+- **O `--harness` aceita a entrada de mouse e teclado do OP2TestHarness**
+  (`mouse`, `click`, `rclick`, `mclick`, `dblclick`, `down`, `up`, `drag`,
+  `select`, `key`, `keydown`, `keyup`, `type`, `uilist`): cada uma vira um
+  evento de verdade na interface do jogo, como o harness manda as mensagens à
+  janela do original. As posições são as do harness: pixels da área cliente
+  (com `--size 1056x800` o porte tem a mesma área de 1032x766 do original),
+  um tile, uma unidade, um ponto do minimapa ou um botão pela dica, com os
+  botões do mouse, Shift/Ctrl/Alt, `hold N` e `+shot`. Com entrada no
+  roteiro, o jogo desenha um quadro a cada tick e a telemetria ganha a seleção
+  e a vista. Nos 40 cenários de entrada do op2-rs as posições caem nos mesmos
+  tiles do original; o que difere é do jogo: a ordem dada pela interface sai
+  no mesmo tick no porte e 12 ticks depois no original, e um clique num
+  caminhão em cima de um prédio escolhe o prédio no porte e o caminhão no
+  original. Fora ficam a rolagem pela borda e pelas setas (o porte lê o
+  cursor e o teclado de verdade) e a tabela de atalhos (`hotkeys`).
+
 **Para quem acompanha o código:** seções 5.48 a 5.52 do PORT_STATUS; os modos
 de teste `--brieftest`, `--listscrolltest`, `--panescrolltest`,
 `--missionscrolltest`, `--e05test`, `--objdump`, `--techunlocktest` e
@@ -203,6 +276,77 @@ de teste `--brieftest`, `--listscrolltest`, `--panescrolltest`,
   map** (2 tiles per notch; a touchpad's sideways swipe, sideways). In the
   preferences screen it is called **Wheel/Scroll Bars**. Off (the default),
   it is the original game.
+
+- **The `--harness` mode runs nearly all OP2TestHarness scripts.**
+  [OP2TestHarness](https://github.com/leviathan400/OP2TestHarness) plays a
+  scenario in the original game and records what happened; `--harness` plays
+  the same script in the port, so the two can be compared. The port knew 15
+  verbs, and 89 of op2-rs's 478 scenarios stopped at verbs it didn't have.
+  It now has the economy and colony verbs (`beacon`, `tube`, `wall`, `player`,
+  `tech`, `mem`, `poke`, `route`, `produce`, `build`, `kit`, `bay`, `cargo`,
+  `transfercargo`, `load`/`unload`, `idle`/`unidle`, `train`, `research`,
+  `launch`), the earthworks (`doze`, `buildwall`, `removewall`), the targeted
+  orders (`repairobj`, `reprogram`, `dismantle`, `scatter`), the disasters
+  (`meteor`, `quake`, `eruption`, `lightning`, `tornado`, `blight`,
+  `empmissile`, `lavaspeed`, `lavapossible`, with `now` to skip the warnings)
+  and the missions' AI groups (`group`). Each sends the packet, or makes the
+  mission API call, the harness makes in the original. Only the mouse and
+  keyboard verbs (`click`, `drag`) are left: there they are real input to the
+  game's window. Verbs the harness itself doesn't know (`salvage`,
+  `groupmove`) get the same "unknown verb" as there.
+
+- **`--harness` writes telemetry (`telemetry.jsonl`)**, as OP2TestHarness
+  does in the original: with `--telemetry-every N`, one line at tick 1, every
+  N ticks and at the end, with each player's colony (food, ore, population,
+  morale, power, buildings, techs) and every building and vehicle (type,
+  owner, tile, HP, command). With `--eco`, also the colony's allocation (free
+  and required workers and scientists, power, food, capacities, the morale
+  inputs), each unit's state (flags, action and its timer, a truck's cargo,
+  the dock) and the mining beacons. The field names and coordinates are the
+  original's, so the two can be compared field by field (167 of op2-rs's
+  scenarios record `--eco` telemetry). Fields the port doesn't model are left
+  out rather than written as 0. And the script now runs in tick order, as in
+  the harness: a tick-1 line listed after lines for later ticks waited for
+  them (in `chaos_big_colony` the colonists only arrived at tick 17085).
+
+- **`--harness`'s trace (`trace.jsonl`) has all of OP2TestHarness's
+  fields.** Besides position, direction, HP and weapon, each unit now has its
+  command and action (by the original's names), the route it's on (the
+  destination, the step, the pixel fraction, the speed, the waypoints and the
+  directions left), its EMP, foam and ESG effects and the tiles it holds. Each
+  line also has the scenario units' weapon fire, every other live object
+  (explosions, animations, units the script didn't create), the object
+  allocator (the highest index and the ring of free slots) and the dead units
+  whose index now belongs to another. The first line is at tick 1, as in the
+  harness, and the `trace` verb writes one on the spot. The nine reference
+  scenarios are unchanged; in the duels every new field matches the original
+  on every tick.
+
+- **`--harness` writes `gamedata.json`**, the game's data as loaded, as
+  OP2TestHarness writes it in the original at the first cycle: the map's
+  geometry, each terrain type's speed per track type, each unit type's stats
+  (player 0's block, a building's size, dock and rubble, a weapon's radius and
+  shortest shot), the cell type of every tile and, with `--eco`, the morale,
+  mine and research tables. Compared with the original nearly everything
+  matches; what differs is the game's: SCAT, BFG and the Spider and Scorpion
+  3-packs have no stats in the port, the tube and walls have no names, and 49
+  tiles of `cm01.map` (x 24..33, y 62..67) are impassable in the original.
+
+- **`--harness` takes OP2TestHarness's mouse and keyboard input** (`mouse`,
+  `click`, `rclick`, `mclick`, `dblclick`, `down`, `up`, `drag`, `select`,
+  `key`, `keydown`, `keyup`, `type`, `uilist`): each becomes a real event to
+  the game's UI, as the harness sends messages to the original's window.
+  Positions are the harness's: client pixels (with `--size 1056x800` the port
+  has the original's 1032x766 client), a tile, a unit, a minimap point or a
+  button by its tooltip, with the mouse buttons, Shift/Ctrl/Alt, `hold N` and
+  `+shot`. With input in the script the game draws a frame every tick and the
+  telemetry gets the selection and the view. On op2-rs's 40 input scenarios
+  the positions land on the same tiles as in the original; what differs is
+  the game's: an order given through the UI runs on the same tick in the port
+  and 12 ticks later in the original, and a click on a truck standing on a
+  building picks the building in the port and the truck in the original. Not
+  modeled: edge and arrow-key scrolling (the port reads the real cursor and
+  keyboard there) and the hotkey table (`hotkeys`).
 
 **For those following the code:** sections 5.48 to 5.52 of PORT_STATUS; the
 `--brieftest`, `--listscrolltest`, `--panescrolltest`, `--missionscrolltest`,
