@@ -50,6 +50,10 @@ public:
         }
     }
     static void SetDaylightMoves(int on)      { s_daylightMoves = on; }
+    // --harness `mem`: a escrita direta na posicao da faixa (dword_54729C) e na fase
+    // (dword_5472A0), como o roteiro do harness faz no original.
+    static void setDaylightPosRaw(int pos)     { s_daylightPos = pos; }
+    static void setDaylightPhaseRaw(int phase) { s_daylightPhase = phase & 0xFFFF; }
     // GameMap::SetInitialLightLevel → sub_41F9A0(0, fase, 0): fase de 16 bits
     // e posição = larguraInterna * fase >> 16.
     static void setDaylightPhase(int phase, int internalWidth) {

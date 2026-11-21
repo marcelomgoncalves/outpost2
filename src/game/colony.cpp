@@ -821,6 +821,7 @@ int colonyDirtProtection(const UnitRecord& r) {
 
 // ---- sub_44E550: moral (slot de 32 ticks do jogador) --------------------------
 static uint32_t s_forceMask[5] = {};   // dword_56DEAC/B0/B4/B8/BC
+uint32_t* colonyForceMasks() { return s_forceMask; }
 
 static void dirtyAll() { for (int i = 0; i < kMaxPlayers; ++i) g_colony[i].dirty = 1; }
 
