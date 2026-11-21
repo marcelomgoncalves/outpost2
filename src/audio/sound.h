@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 namespace op2 {
 
 // Gerenciador de som — porta o objeto unk_56C610 do OUTPOST2.EXE (DirectSound):
@@ -71,5 +73,21 @@ void soundLockAudio(bool lock);
 
 // Som de seleção do tipo (campo +0x1F0 do descritor off_4E1340[map_id]).
 int unitSelectSound(int mapId);
+
+// --harness (o audio.jsonl do OP2TestHarness). Extra deste porte, nada disto existe
+// no original: o harness de la engancha as chamadas do jogo. `clock` troca o relogio
+// das vozes e do filtro de mensagens (timeGetTime; aqui SDL_GetTicks) por um que anda
+// com os ticks, e `log` recebe cada pedido de som: "sfx" (sub_47EE00/sub_47F020,
+// x = -1 sem posicao), "savant" (sub_47F060), "play" (a voz que a fila toca) e "msg"
+// (sub_438F70; pass 1 mostrada, 0 barrada pelo filtro, -1 id fora do filtro). Com o
+// harness ligado a fila de vozes funciona sem dispositivo e so anda pelo
+// soundHarnessPump (o harness a chama nos ticks em que o original a chama).
+using SoundLogFn = void (*)(const char* ev, int id, int x, int y, int pass);
+void soundSetHarness(uint32_t (*clock)(), SoundLogFn log);
+uint32_t soundClock();                     // o relogio em vigor (ms)
+void soundLog(const char* ev, int id, int x, int y, int pass = -2);
+void soundHarnessPump();                   // sub_47F250 com o relogio do harness
+int  soundLengthMs(int id);                // duracao do WAV (do cabecalho; tambem sem audio)
+const char* soundName(int id);             // nome do arquivo (off_4E0160)
 
 } // namespace op2

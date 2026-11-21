@@ -121,5 +121,7 @@ const int8_t* artFrameOffsets(int raw, int frame);   // sub_404DF0 (bytes x1,y1,
 int scorchTileFor(int tile);
 // sub_436EA0: linha de visada entre tiles do port (≠0 = livre).
 int mapLineOfSight(int x0, int y0, int x1, int y1);
+// desc+0x250 da arma (1 = sem linha de visada no teste de alcance); -1 se o tipo não é arma.
+int weaponRangeMode(int type);
 
 } // namespace op2

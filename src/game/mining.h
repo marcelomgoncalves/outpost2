@@ -31,6 +31,8 @@ struct UnitRecord;
 // Rota (comando sub_453FA0 → pacote 0x27; ação 0x27 = jpt_43B312 case 39).
 
 bool loadMinesSheet();
+// Linha do MINES.TXT [variante][rendimento]: inicial, pico e mínimo, e os caminhões do pico e do mínimo.
+void mineSheetRow(int variant, int bar, int& initial, int& peakTruck, int& peak, int& minTruck, int& min);
 
 // Prédio do jogador `owner` cujo footprint contém o tile (x,y) — o iterador
 // sub_437EB0 com a classe 4 e a máscara do dono. 0 se nenhum.

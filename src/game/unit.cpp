@@ -174,6 +174,8 @@ void unitFreeSlot(int id) {            // sub_439B90 (parte do slot)
     s_freeRing.push_back(id);
 }
 
+const std::deque<int>& unitFreeRing() { return s_freeRing; }
+
 UnitRecord* Unit::rec() const {
     if (m_id <= 0 || m_id >= static_cast<int>(g_units.size())) return nullptr;
     return &g_units[m_id];

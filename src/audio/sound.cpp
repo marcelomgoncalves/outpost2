@@ -223,7 +223,7 @@ void soundStopAll() {                                     // sub_47E0C0
     for (Channel& c : s_ch) { c.s = nullptr; c.positional = false; }
     SDL_UnlockAudioDevice(s_dev);
     s_queue.clear();
-    s_nextVoice = SDL_GetTicks();
+    s_nextVoice = soundClock();
 }
 
 // sub_47E6F0 (subir) e sub_47E750 (descer), o contador [+0x91C].
@@ -267,8 +267,39 @@ void soundSetListener(int cx, int cy) {
         if (c.s && c.positional) positionalGains(c.x, c.y, c.gl, c.gr);
     SDL_UnlockAudioDevice(s_dev);
 }
-void soundPlay(int id) { startSound(id, -1, -1, false); }
-void soundPlayAt(int x, int y, int id) { startSound(id, x, y, y != -1); }   // y = −1 → global
+// --harness (ver sound.h).
+static uint32_t (*s_clock)() = nullptr;
+static SoundLogFn s_log = nullptr;
+void soundSetHarness(uint32_t (*clock)(), SoundLogFn log) { s_clock = clock; s_log = log; }
+uint32_t soundClock() { return s_clock ? s_clock() : SDL_GetTicks(); }
+void soundLog(const char* ev, int id, int x, int y, int pass) { if (s_log) s_log(ev, id, x, y, pass); }
+const char* soundName(int id) { return id > 0 && id < 252 ? kSoundNames[id] : (id == 0 ? "" : "?"); }
+int soundLengthMs(int id) {
+    if (id < 0 || id >= 252) return 0;
+    if (!s_samples[id].pcm.empty() || s_samples[id].ms) return static_cast<int>(s_samples[id].ms);
+    // Sem dispositivo: so o cabecalho, com a mesma conta do decode (sub_47F300).
+    static int cache[252];
+    static bool done[252];
+    if (!done[id]) {
+        done[id] = true;
+        if (auto st = g_ResManager.openStream(kSoundNames[id])) {
+            SDL_AudioSpec spec;
+            Uint8* buf = nullptr; Uint32 blen = 0;
+            if (SDL_LoadWAV_RW(SDL_RWFromConstMem(st->data(), static_cast<int>(st->size())), 1, &spec, &buf, &blen)) {
+                cache[id] = static_cast<int>(static_cast<uint64_t>(blen) * 1000 * 8 / 0x2B110 /
+                                             (SDL_AUDIO_BITSIZE(spec.format) / 8) / spec.channels);
+                SDL_FreeWAV(buf);
+            }
+        }
+    }
+    return cache[id];
+}
+
+void soundPlay(int id) { soundLog("sfx", id, -1, -1); startSound(id, -1, -1, false); }
+void soundPlayAt(int x, int y, int id) {   // y = −1 → global
+    soundLog("sfx", id, y == -1 ? -1 : x, y);
+    startSound(id, x, y, y != -1);
+}
 
 static int s_lastVoiceReq = -1;                           // so para os testes
 int  soundLastVoiceRequest() { return s_lastVoiceReq; }
@@ -276,28 +307,39 @@ void soundClearVoiceRequest() { s_lastVoiceReq = -1; }
 
 void soundVoice(int id, int x, int y) {                   // sub_47F060 -> sub_47F0A0
     s_lastVoiceReq = id;                                  // antes do porteiro do audio
-    if (!s_enabled) return;
+    soundLog("savant", id, x, y);
+    if (!s_enabled && !s_clock) return;                   // (o harness tem a fila sem dispositivo)
     if (id == 0x87 || id == 0x86 || id == 0xAD) {        // fim de jogo: cala tudo e zera a fila
-        SDL_LockAudioDevice(s_dev);
-        for (Channel& c : s_ch) c.s = nullptr;
-        SDL_UnlockAudioDevice(s_dev);
+        if (s_dev) {
+            SDL_LockAudioDevice(s_dev);
+            for (Channel& c : s_ch) c.s = nullptr;
+            SDL_UnlockAudioDevice(s_dev);
+        }
         s_queue.clear();
-        s_nextVoice = SDL_GetTicks();
+        s_nextVoice = soundClock();
     }
     if (s_queue.size() < 8) s_queue.push_back(Voice{id, x, y});   // cheia: descarta
 }
 
 // sub_47F250: quando passa a hora, a voz da frente toca como som global e a
 // próxima fica p/ agora + duração + 750 ms.
-void soundUpdate() {
-    if (!s_enabled || s_queue.empty()) return;
-    const uint32_t now = SDL_GetTicks();
+static void pumpVoices() {
+    if (s_queue.empty()) return;
+    const uint32_t now = soundClock();
     if (s_nextVoice >= now) return;
     const Voice v = s_queue.front();
     s_queue.erase(s_queue.begin());
+    soundLog("play", v.id, -1, -1);
     startSound(v.id, -1, -1, false);
-    s_nextVoice = now + (v.id >= 0 && v.id < 252 ? s_samples[v.id].ms : 0) + 0x2EE;
+    s_nextVoice = now + static_cast<uint32_t>(soundLengthMs(v.id)) + 0x2EE;
 }
+
+void soundUpdate() {
+    if (s_clock || !s_enabled) return;                    // com o harness, so o soundHarnessPump
+    pumpVoices();
+}
+
+void soundHarnessPump() { pumpVoices(); }
 
 // +0x1F0 gravado pelo vt[4] de cada descritor (ex.: sub_405D60 do Cargo Truck =
 // 0x38); veículos 0x01..0x10 e prédios 0x15..0x3A. Paredes/tubos, armas e o

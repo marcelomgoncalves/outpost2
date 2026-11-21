@@ -226,6 +226,7 @@ static const WeaponClass* classOf(int type) {
 }
 
 bool isWeaponProjectile(int type) { return classOf(type) != nullptr; }
+int weaponRangeMode(int type) { const WeaponClass* c = classOf(type); return c ? c->rangeMode : -1; }
 
 static bool esgPeriodic(int pid);
 

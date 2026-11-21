@@ -110,6 +110,11 @@ struct MoraleRow {
 };
 bool loadMoraleSheet();
 const MoraleRow& moraleRow(int level);
+// As 67 entradas do MORALE.TXT (tabela @0x4E1F08): nome, valor (o de % já em /256) e se é %.
+int moraleEntryCount();
+const char* moraleEntryName(int i);
+int moraleEntryValue(int i);
+bool moraleEntryPct(int i);
 
 // vt+0xA0 por classe (sub_483750 base; sub_40C1B0 CC; sub_46E6D0 geradores;
 // sub_46E880 Solar; sub_44AD60 minas/Magma Well).
@@ -152,7 +157,10 @@ bool structureDoActivate(int id);                   // case 19 (false se faltar 
 // -1 = todos. Fiel ao original, INCLUSIVE o XOR: forçar um nível alterna o
 // bit do jogador nas CINCO máscaras antes de ligá-lo na escolhida (então um
 // 1º ForceMoraleGood deixa todas ligadas e vale o Great, checado primeiro).
-void colonyForceMorale(int player, int level);      // level 0=Great .. 4=Rotten
+void colonyForceMorale(int player, int level);
+// As cinco mascaras da moral forcada (Great..Rotten, bit = jogador); o --harness
+// as escreve como o roteiro do original escreve dword_56EAEC..56EAFC.
+uint32_t* colonyForceMasks();      // level 0=Great .. 4=Rotten
 void colonyFreeMorale(int player);
 // O bit do jogador está em alguma das cinco máscaras (moral "(Steady)").
 bool colonyMoraleForced(int player);
