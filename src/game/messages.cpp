@@ -70,7 +70,7 @@ static bool cooldownAllow(uint32_t& lastT, uint32_t span, uint32_t now) {
 
 // sub_439490: retorna false p/ barrar a mensagem.
 static bool messageAllowed(int id, int x, int y) {
-    const uint32_t now = SDL_GetTicks();                     // timeGetTime
+    const uint32_t now = soundClock();                       // timeGetTime (o do harness, com --harness)
     switch (id) {
         case 0x60: case 0x61: case 0x67: case 0x68: case 0x6A: case 0x6B: case 0x6C: case 0x99: {
             int freeSlot = -1;
@@ -110,12 +110,13 @@ void postMessage(int x, int y, const char* text, int soundId) {
     // Sem som → beep 0x5B; vozes do Savant (0x5E..0xE3) passam pelo filtro e
     // vão p/ a fila (sub_47F060); o resto toca direto (sub_47F020).
     if (soundId >= 0x5E && soundId < 0xE4) {
-        if (!messageAllowed(soundId, x, y)) return;
+        if (!messageAllowed(soundId, x, y)) { soundLog("msg", soundId, x, y, 0); return; }
         soundVoice(soundId, x, y);
     } else {
         soundPlay(soundId ? soundId : 0x5B);
     }
     logMessage(x, y, text, soundId ? soundId : 0x5B);
+    soundLog("msg", soundId, x, y, soundId >= 0x5E && soundId < 0xE4 ? 1 : -1);
 }
 
 // Extra deste porte: entra no log e na barra sem tocar nada (o diagnostico de

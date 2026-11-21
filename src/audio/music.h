@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <vector>
 
 namespace op2 {
 
@@ -30,6 +31,8 @@ void musicSetEnabled(bool on);                            // sub_450E90
 void musicPause();                                        // sub_450A90
 void musicResume();                                       // sub_450B00
 bool musicPlaying();
+// --harness (audio.jsonl): a lista [+0xCC], o indice de repeticao [+0xC8] e a posicao [+0xD0].
+void musicDebugState(std::vector<int>& list, int& repeatStart, int& index);
 
 // Chamado pelo mixer (thread de áudio): soma `frames` amostras estéreo em acc,
 // na taxa `freq` do dispositivo.

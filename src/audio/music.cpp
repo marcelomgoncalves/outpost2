@@ -149,6 +149,10 @@ void startTimer() { s.running = true; s.bufferPlaying = false; }
 
 } // namespace
 
+void musicDebugState(std::vector<int>& list, int& repeatStart, int& index) {
+    list = s.list; repeatStart = s.repeatStart; index = s.index;
+}
+
 void musicSetClmPath(const char* path) { s.clmPath = path ? path : "op2.clm"; }
 
 void musicStartGame(int missionType, bool loadedGame) {      // sub_4507B0
