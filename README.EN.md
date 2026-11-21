@@ -275,6 +275,9 @@ PBMP tilesets, the `op2_art` sprites, the data sheets and the `.ANI` cursors.
   (the new name of List Scroll Bars), the mouse wheel scrolls the map.
 - **Eden mission 05: the empty Cargo Trucks objective** never completed.
   Fixed; all 22 objectives of the mission were checked one by one.
+- **`--harness` runs nearly all OP2TestHarness scripts**: the economy,
+  colony, earthwork, disaster and AI group verbs, so op2-rs's scenarios can
+  be compared with the original. Only mouse and keyboard input is left.
 
 ### 2026-11-19
 

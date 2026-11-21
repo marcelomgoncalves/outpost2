@@ -132,6 +132,24 @@ details of each one are in [PORT_STATUS.BR.md](PORT_STATUS.BR.md)
   lados). Na tela de preferências ela se chama **Wheel/Scroll Bars**.
   Desligada (o padrão), é o jogo original.
 
+- **O modo `--harness` roda os roteiros do OP2TestHarness quase por
+  inteiro.** O [OP2TestHarness](https://github.com/leviathan400/OP2TestHarness)
+  joga um cenário no jogo original e grava o que aconteceu; o `--harness` joga
+  o mesmo roteiro no porte, para comparar os dois. Antes o porte só conhecia
+  15 verbos e 89 dos 478 cenários do op2-rs paravam em verbos que ele não
+  tinha. Agora ele tem os de economia e de colônia (`beacon`, `tube`, `wall`,
+  `player`, `tech`, `mem`, `poke`, `route`, `produce`, `build`, `kit`, `bay`,
+  `cargo`, `transfercargo`, `load`/`unload`, `idle`/`unidle`, `train`,
+  `research`, `launch`), as obras (`doze`, `buildwall`, `removewall`), os
+  comandos com alvo (`repairobj`, `reprogram`, `dismantle`, `scatter`), os
+  desastres (`meteor`, `quake`, `eruption`, `lightning`, `tornado`, `blight`,
+  `empmissile`, `lavaspeed`, `lavapossible`, com o `now` que pula os avisos)
+  e os grupos de IA das missões (`group`). Cada um manda o mesmo pacote ou faz
+  a mesma chamada da API de missão que o harness faz no original. Fora ficam
+  só os de mouse e teclado (`click`, `drag`), que viram uma entrada real na
+  janela do jogo. Verbos que o próprio harness não conhece (`salvage`,
+  `groupmove`) dão o mesmo "unknown verb" de lá.
+
 **Para quem acompanha o código:** seções 5.48 a 5.52 do PORT_STATUS; os modos
 de teste `--brieftest`, `--listscrolltest`, `--panescrolltest`,
 `--missionscrolltest`, `--e05test`, `--objdump`, `--techunlocktest` e
@@ -203,6 +221,24 @@ de teste `--brieftest`, `--listscrolltest`, `--panescrolltest`,
   map** (2 tiles per notch; a touchpad's sideways swipe, sideways). In the
   preferences screen it is called **Wheel/Scroll Bars**. Off (the default),
   it is the original game.
+
+- **The `--harness` mode runs nearly all OP2TestHarness scripts.**
+  [OP2TestHarness](https://github.com/leviathan400/OP2TestHarness) plays a
+  scenario in the original game and records what happened; `--harness` plays
+  the same script in the port, so the two can be compared. The port knew 15
+  verbs, and 89 of op2-rs's 478 scenarios stopped at verbs it didn't have.
+  It now has the economy and colony verbs (`beacon`, `tube`, `wall`, `player`,
+  `tech`, `mem`, `poke`, `route`, `produce`, `build`, `kit`, `bay`, `cargo`,
+  `transfercargo`, `load`/`unload`, `idle`/`unidle`, `train`, `research`,
+  `launch`), the earthworks (`doze`, `buildwall`, `removewall`), the targeted
+  orders (`repairobj`, `reprogram`, `dismantle`, `scatter`), the disasters
+  (`meteor`, `quake`, `eruption`, `lightning`, `tornado`, `blight`,
+  `empmissile`, `lavaspeed`, `lavapossible`, with `now` to skip the warnings)
+  and the missions' AI groups (`group`). Each sends the packet, or makes the
+  mission API call, the harness makes in the original. Only the mouse and
+  keyboard verbs (`click`, `drag`) are left: there they are real input to the
+  game's window. Verbs the harness itself doesn't know (`salvage`,
+  `groupmove`) get the same "unknown verb" as there.
 
 **For those following the code:** sections 5.48 to 5.52 of PORT_STATUS; the
 `--brieftest`, `--listscrolltest`, `--panescrolltest`, `--missionscrolltest`,

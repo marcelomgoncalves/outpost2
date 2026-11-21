@@ -258,6 +258,10 @@ cursores `.ANI`.
   Operational" é a do Space Program, o quinto botão; os objetivos são o
   sexto, o mais à direita.)
 
+- **O `--harness` roda quase todos os roteiros do OP2TestHarness**: os
+  verbos de economia, colônia, obras, desastres e grupos de IA, para
+  comparar os cenários do op2-rs com o original. Falta só a entrada de
+  mouse e teclado.
 - **A tela de briefing como no original.** O texto do briefing de cada
   missão fica numa caixa estreita à esquerda e, à direita, a imagem da missão
   (as 12 do Eden e as 12 do Plymouth, que vêm do próprio jogo). Os objetivos

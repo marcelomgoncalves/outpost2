@@ -152,7 +152,10 @@ bool structureDoActivate(int id);                   // case 19 (false se faltar 
 // -1 = todos. Fiel ao original, INCLUSIVE o XOR: forçar um nível alterna o
 // bit do jogador nas CINCO máscaras antes de ligá-lo na escolhida (então um
 // 1º ForceMoraleGood deixa todas ligadas e vale o Great, checado primeiro).
-void colonyForceMorale(int player, int level);      // level 0=Great .. 4=Rotten
+void colonyForceMorale(int player, int level);
+// As cinco mascaras da moral forcada (Great..Rotten, bit = jogador); o --harness
+// as escreve como o roteiro do original escreve dword_56EAEC..56EAFC.
+uint32_t* colonyForceMasks();      // level 0=Great .. 4=Rotten
 void colonyFreeMorale(int player);
 // O bit do jogador está em alguma das cinco máscaras (moral "(Steady)").
 bool colonyMoraleForced(int player);
