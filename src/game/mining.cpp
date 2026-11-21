@@ -41,6 +41,11 @@ struct MineRow { int initial = 0, peakTruck = 1, peak = 0, minTruck = 2, min = 0
 static MineRow s_mines[3][3];          // [variante][rendimento]
 static bool s_minesLoaded = false;
 
+void mineSheetRow(int variant, int bar, int& initial, int& peakTruck, int& peak, int& minTruck, int& min) {
+    const MineRow& m = s_mines[variant % 3][bar % 3];
+    initial = m.initial; peakTruck = m.peakTruck; peak = m.peak; minTruck = m.minTruck; min = m.min;
+}
+
 bool loadMinesSheet() {
     if (s_minesLoaded) return true;
     auto st = g_ResManager.openStream("mines.txt");
