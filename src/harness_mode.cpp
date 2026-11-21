@@ -4,7 +4,7 @@
 //
 //   outpost2_modern.exe --harness --script S --out DIR --map cm01.map --ticks N
 //                       [--seed N] [--techtree multitek.txt] [--trace-every N]
-//                       [--shot-every N] [--size WxH] [--show]
+//                       [--shot-every N] [--telemetry-every N] [--eco] [--size WxH] [--show]
 //
 // The script is the harness's: one `<tick> <verb> <args...>` per line, '#' starts a
 // comment; lines at tick T run after the cycle of tick T, as the harness runs them
@@ -15,6 +15,9 @@
 // Outputs in DIR:
 //   trace.jsonl   per traced tick: each spawn still alive, with the harness's field
 //                 names (px/py/fix/dir/hp/weapon/tur/reload/tgt/lights...) and the RNG
+//   telemetry.jsonl  with --telemetry-every N: each player's colony and every building and
+//                 vehicle at tick 1 and every N ticks, plus the end, as the harness writes it;
+//                 --eco adds the colony internals and the mining beacons
 //   harness.log   what ran, spawns, unsupported verbs, the end of the run
 //   shot_<tick>.bmp  the game view every --shot-every ticks
 //
@@ -25,6 +28,7 @@
 
 #include <SDL.h>
 
+#include <algorithm>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
@@ -36,7 +40,15 @@
 #include <vector>
 
 #include "app/game_state.h"
+#include "game/ai_group.h"
 #include "game/building_sheet.h"
+#include "game/colony.h"
+#include "game/disaster.h"
+#include "game/docking.h"
+#include "game/missile.h"
+#include "game/research.h"
+#include "game/trigger.h"
+#include "game/walls.h"
 #include "game/command.h"
 #include "game/game_map.h"
 #include "game/player.h"
@@ -54,8 +66,8 @@ namespace {
 
 struct Options {
     std::string script, out = ".", map = "cm01.map", techtree = "multitek.txt";
-    int ticks = 3000, seed = 1, traceEvery = 1, shotEvery = 0, width = 1024, height = 768;
-    bool show = false;
+    int ticks = 3000, seed = 1, traceEvery = 1, shotEvery = 0, telemEvery = 0, width = 1024, height = 768;
+    bool show = false, eco = false;
 };
 
 struct Line {
@@ -113,12 +125,19 @@ bool loadScript(const std::string& path, std::vector<Line>& out) {
         l.number = n;
         out.push_back(l);
     }
+    // In tick order, lines of one tick in file order, as the harness sorts its script: a
+    // scenario's translation can list a tick-1 line after lines for later ticks.
+    std::stable_sort(out.begin(), out.end(), [](const Line& a, const Line& b) { return a.tick < b.tick; });
     return true;
 }
 
 std::vector<int> g_spawned;   // spawn index -> unit id (0 = failed)
 std::vector<int> g_spawnType;
 std::vector<bool> g_spawnGone;
+
+FILE* g_telem = nullptr;   // telemetry.jsonl (--telemetry-every)
+bool g_eco = false;        // --eco: the colony and unit internals too
+void writeTelemetry(int tick);
 
 // Port tile x from a script x.
 int tileX(const Line& l, int x) {
@@ -157,6 +176,360 @@ void sendPacket(int id, CommandPacket& p) {
     processCommandPacket(g_units[id].owner & 0x0F, p);
 }
 
+// Internal tile x (the original's) from a script x, as the original's mission API takes it.
+int internalX(const Line& l, int x) {
+    return l.fileCoords ? x + std::max(0, g_gameMap.internalXOffset()) : x;
+}
+
+// The owner's packet, run now (the harness calls ProcessCommandPacket directly, as here).
+void runPacket(int id, CommandPacket& p) {
+    if (p.unitIds.empty()) p.unitIds.assign(1, id);
+    processCommandPacket(g_units[id].owner & 0x0F, p);
+}
+
+// A spawn (@N) the trace has seen die, or that failed: the original gives it no more orders.
+bool spawnGone(const std::string& a) {
+    if (a.empty() || a[0] != '@') return false;
+    const size_t n = std::strtoul(a.c_str() + 1, nullptr, 10);
+    return n >= g_spawned.size() || (n < g_spawnGone.size() && g_spawnGone[n]);
+}
+
+const char* codeNameOf(int type) {
+    const char* n = unitCodeName(type);
+    return n ? n : "?";
+}
+
+int numArg(const std::string& a) { return static_cast<int>(std::strtol(a.c_str(), nullptr, 0)); }
+
+// Script names of mission AI groups (`group <name> ...`): stub and kind.
+struct NamedGroup { std::string name; int stub, kind; };
+std::vector<NamedGroup> g_groups;
+const NamedGroup* findGroup(const std::string& name) {
+    for (const NamedGroup& g : g_groups) if (g.name == name) return &g;
+    return nullptr;
+}
+
+// The live units of a type (a disaster line's new one is the one not there before, for `now`).
+std::vector<int> liveOfType(int type) {
+    std::vector<int> ids;
+    for (size_t i = 1; i < g_units.size(); ++i)
+        if (g_units[i].id != -1 && g_units[i].type == type && !(g_units[i].flags & UNIT_DEAD)) ids.push_back(static_cast<int>(i));
+    return ids;
+}
+
+// `group <name> <op> [args]`: the mission API's ScGroup / FightGroup / MiningGroup / BuildingGroup calls (OP2TestHarness
+// README "Group verbs"), through the port functions the mission DLLs reach (mission/op2_api.cpp). Tiles as there:
+// internal x, except patrol points (port x, as FG_SetPatrolMode converts them).
+void runGroup(const Line& l) {
+    auto arg = [&](size_t i) { return i < l.args.size() ? l.args[i] : std::string(); };
+    auto num = [&](size_t i) { return numArg(arg(i)); };
+    const std::string name = arg(0), op = arg(1);
+    if (op == "new") {
+        const std::string kind = arg(2);
+        const int k = kind == "mining" ? GK_MINE : kind == "building" ? GK_BUILD : GK_FIGHT;
+        const int stub = aiCreateGroup(k, num(3));
+        g_groups.push_back({name, stub, k});
+        logf("group %s: %s group of player %d -> stub %d", name.c_str(), kind.c_str(), num(3), stub);
+        return;
+    }
+    const NamedGroup* g = findGroup(name);
+    if (!g) { logf("script: group %s: unknown group", name.c_str()); return; }
+    const int id = g->stub;
+    auto ix = [&](size_t i) { return internalX(l, num(i)); };
+    auto groupArg = [&](size_t i) { const NamedGroup* o = findGroup(arg(i)); return o ? o->stub : 0xFF; };
+    if (op == "take") { for (size_t i = 2; i < l.args.size(); ++i) aiTakeUnit(id, unitArg(arg(i))); }
+    else if (op == "remove") aiRemoveUnit(id, unitArg(arg(2)));
+    else if (op == "lights") aiSetLights(id, num(2) != 0);
+    else if (op == "enable") stubEnable(id, true);
+    else if (op == "disable") stubEnable(id, false);
+    else if (op == "destroy") { aiGroupDestroyed(id); stubDestroy(id); }
+    else if (op == "rect") {
+        if (g->kind == GK_FIGHT) aiFightSetRect(id, ix(2), num(3), ix(4), num(5));
+        else aiBuildSetRect(id, ix(2), num(3), ix(4), num(5));
+    }
+    else if (op == "guardedrect") aiFightAddGuardedRect(id, ix(2), num(3), ix(4), num(5));
+    else if (op == "clearguarded") aiFightClearGuardedRects(id);
+    else if (op == "guardrect") aiFightSetMode(id, 0);
+    else if (op == "patrolonly") aiFightSetMode(id, 1);
+    else if (op == "guardgroup") aiFightSetMode(id, 2);
+    else if (op == "guardunit") aiFightSetMode(id, 3);
+    else if (op == "attackunit") aiFightSetMode(id, 4);
+    else if (op == "attackenemy") aiFightSetMode(id, 5);
+    else if (op == "exitmap") aiFightSetMode(id, 6);
+    else if (op == "clearpatrol") aiFightClearPatrol(id);
+    else if (op == "combine") aiFightSetCombineFire(id, num(2) != 0);
+    else if (op == "follow") aiFightSetFollowMode(id, num(2));
+    else if (op == "targetunit") aiFightSetTargetUnit(id, unitArg(arg(2)));
+    else if (op == "targetgroup") aiFightSetTargetGroup(id, groupArg(2));
+    else if (op == "attacktype") aiFightSetAttackType(id, typeByName(arg(2)));
+    else if (op == "patrol") {
+        int xs[8], ys[8], n = 0;
+        for (size_t i = 3; i < l.args.size() && n < 8; ++i) {
+            int x = 0, y = 0;
+            if (std::sscanf(l.args[i].c_str(), "%d,%d", &x, &y) == 2) { xs[n] = tileX(l, x); ys[n] = y; ++n; }
+        }
+        aiFightSetPatrol(id, n, num(2), xs, ys);
+    }
+    else if (op == "mine") aiMineSetup(id, unitArg(arg(2)), unitArg(arg(3)), ix(4), num(5), ix(6), num(7));
+    else if (op == "targcount") aiSetTargCount(id, typeByName(arg(2)), typeByName(arg(3)), num(4));
+    else if (op == "cleartargcount") aiClearTargCount(id);
+    else if (op == "reinforce") aiBuildRecordReinforce(id, groupArg(2), num(3));
+    else if (op == "unreinforce") aiBuildUnRecordReinforce(id, groupArg(2));
+    else if (op == "building")
+        aiBuildRecordBuilding(id, ix(2), num(3), typeByName(arg(4)), typeByName(arg(5)), l.args.size() > 6 ? groupArg(6) : 0xFF);
+    else if (op == "tube") aiBuildRecordTube(id, ix(2), num(3));
+    else if (op == "wall") aiBuildRecordWall(id, ix(2), num(3), l.args.size() > 4 ? typeByName(arg(4)) : 0x12);
+    else if (op == "dump") {
+        std::string members;
+        for (int i = 0;; ++i) {
+            const int u = aiGroupMemberAt(id, i);
+            if (!u) break;
+            members += " " + std::to_string(u);
+        }
+        logf("group %s (stub %d): %d units:%s", name.c_str(), id, aiTotalUnitCount(id), members.c_str());
+    }
+    else logf("script: group: unknown op %s", op.c_str());
+}
+
+// The colony and world verbs (OP2TestHarness README "Economy verbs", "Disasters"). False for a verb it doesn't know.
+bool runEco(const Line& l, int tick) {
+    auto arg = [&](size_t i) { return i < l.args.size() ? l.args[i] : std::string(); };
+    auto num = [&](size_t i) { return numArg(arg(i)); };
+    const std::string& v = l.verb;
+    if (v == "tube" || v == "wall") {      // tube|wall x1 y1 x2 y2 [TYPE]: Game::CreateWall over the inclusive rectangle
+        const int type = v == "tube" ? 0x11 : (l.args.size() > 4 ? typeByName(arg(4)) : 0x12);
+        for (int y = num(1); y <= num(3); ++y)
+            for (int x = num(0); x <= num(2); ++x) createWallOrTube(tileX(l, x), y, type);
+        return true;
+    }
+    if (v == "mem") {   // the original's addresses (OPU 1.4.1) that the oracle scripts write, as op2-sim models them
+        const uint32_t addr = static_cast<uint32_t>(std::strtoul(arg(0).c_str(), nullptr, 0));
+        const int value = num(2);
+        if (addr >= 0x56EAEC && addr <= 0x56EAFC && (addr - 0x56EAEC) % 4 == 0) {   // the forced-morale masks
+            colonyForceMasks()[(addr - 0x56EAEC) / 4] = static_cast<uint32_t>(value);
+            for (int p = 0; p < kMaxPlayers; ++p) colonyMarkDirty(p);
+        }
+        else if (addr == 0x56EAE0) TethysGame::SetDaylightMoves(value != 0);       // GameImpl option 0x12
+        else if (addr == 0x56EAE4) TethysGame::SetDaylightEverywhere(value != 0);  // option 0x13
+        else if (addr == 0x5472DC) TethysGame::setDaylightPosRaw(value);           // the light band's position
+        else if (addr == 0x5472E0) TethysGame::setDaylightPhaseRaw(value);         // and its phase
+        else if (addr == 0x56EAB4) {}                                              // the hidden fog: display only
+        else logf("script: tick %d line %d: mem %s is not supported here", tick, l.number, arg(0).c_str());
+        return true;
+    }
+    if (v == "peek") {
+        logf("script: tick %d line %d: peek reads the original's memory: not supported here", tick, l.number);
+        return true;
+    }
+    if (v == "tech") {                     // tech <player> <techID>: _Player::MarkResearchComplete
+        if (techIndex(num(1)) < 0 || num(0) < 0 || num(0) >= kMaxPlayers)
+            logf("script: tech %s %s: no such player or topic in this tech tree", arg(0).c_str(), arg(1).c_str());
+        else Player[num(0)].MarkResearchComplete(num(1));
+        return true;
+    }
+    if (v == "player") {                   // player <n> <field> <value>: a PlayerImpl field
+        const int p = num(0), value = num(2);
+        const std::string f = arg(1);
+        if (p < 0 || p >= kMaxPlayers) { logf("script: player: no player %s", arg(0).c_str()); return true; }
+        PlayerData& d = g_playerData[p];
+        if (f == "food") d.foodStored = value;
+        else if (f == "common") d.ore = value;
+        else if (f == "rare") d.rareOre = value;
+        else if (f == "moraleLevel") d.morale = value;
+        else if (f == "morale") g_colony[p].moraleValue = value;
+        else if (f == "workers") d.workers = value;
+        else if (f == "scientists") d.scientists = value;
+        else if (f == "kids") d.kids = value;
+        else if (f == "solarsat") Player[p].SetSolarSat(value);
+        else if (!f.empty() && f[0] >= '0' && f[0] <= '9') {
+            const int off = numArg(f);
+            if (off == 0x2C) d.isEden = value;
+            else if (off == 0x04) d.allyMask = static_cast<uint32_t>(value);
+            else if (off == 0x08) {        // RLVs bits 0-3, solar satellites 4-7, the space bits from 8
+                d.rlvCount = value & 0xF;
+                d.solarSat = (value >> 4) & 0xF;
+                d.spaceBits = static_cast<uint32_t>(value) >> 8;
+            }
+            else { logf("script: tick %d line %d: player field %s is not supported here", tick, l.number, f.c_str()); return true; }
+        } else { logf("script: player: bad field %s", f.c_str()); return true; }
+        colonyMarkDirty(p);                // recalculateValues_
+        return true;
+    }
+    if (v == "meteor" || v == "quake" || v == "eruption" || v == "lightning" || v == "tornado") {
+        const bool now = !l.args.empty() && l.args.back() == "now";
+        const int x = tileX(l, num(0)), y = num(1);
+        const int type = v == "meteor" ? 0x50 : v == "quake" ? 0x4E : v == "eruption" ? 0x4F : v == "lightning" ? 0x4C : 0x4D;
+        const std::vector<int> before = liveOfType(type);
+        const int endX = num(3) == -1 ? -1 : tileX(l, num(3));
+        if (v == "meteor") setMeteor(x, y, num(2));
+        else if (v == "quake") setEarthquake(x, y, num(2));
+        else if (v == "eruption") setEruption(x, y, num(2));
+        else if (v == "lightning") setLightning(x, y, num(2), endX, num(4));
+        else setTornado(x, y, num(2), endX, num(4), now);
+        int made = 0;
+        for (int id : liveOfType(type))
+            if (std::find(before.begin(), before.end(), id) == before.end()) {
+                made = id;
+                if (now) g_units[id].flags |= 0x8000u | 0x4000u;   // skips the two warning waits
+            }
+        logf("%s at (%s,%s): unit %d", v.c_str(), arg(0).c_str(), arg(1).c_str(), made);
+        return true;
+    }
+    if (v == "empmissile") {               // empmissile x y owner tx ty
+        setEMPMissile(tileX(l, num(0)), num(1), num(2), tileX(l, num(3)), num(4));
+        return true;
+    }
+    if (v == "blight") {                   // blight x y [speed]: SetMicrobeSpreadSpeed, then GameMap::SetVirusUL
+        if (l.args.size() > 2 && num(2) >= 0) setMicrobeSpreadSpeed(num(2));
+        setVirusUL(internalX(l, num(0)), num(1), 1);
+        return true;
+    }
+    if (v == "lavaspeed") { setLavaSpeed(num(0)); return true; }
+    if (v == "lavapossible") {             // lavapossible x1 y1 x2 y2 0|1
+        for (int y = num(1); y <= num(3); ++y)
+            for (int x = num(0); x <= num(2); ++x) setLavaPossible(tileX(l, x), y, num(4) != 0);
+        return true;
+    }
+    if (v == "beacon") {                   // beacon x y ore bar variant | beacon x y vent|fumarole
+        const std::string kind = arg(2);
+        const int type = kind == "vent" ? 0x52 : kind == "fumarole" ? 0x53 : 0x51;
+        const bool mine = type == 0x51;
+        const int ok = createBeacon(type, tileX(l, num(0)), num(1), mine ? num(2) : -1, mine ? num(3) : -1, mine ? num(4) : -1);
+        logf("beacon %s at (%s,%s): %d", kind.c_str(), arg(0).c_str(), arg(1).c_str(), ok);
+        return true;
+    }
+
+    // Verbs on a unit (the first argument).
+    static const char* const unitVerbs[] = {
+        "poke", "route", "produce", "idle", "unidle", "train", "load", "unload", "kit", "cargo", "bay", "transfercargo",
+        "launch", "build", "doze", "buildwall", "removewall", "repairobj", "reprogram", "dismantle", "research", "scatter" };
+    if (std::none_of(std::begin(unitVerbs), std::end(unitVerbs), [&](const char* n) { return v == n; })) return false;
+    if (v == "scatter") {                  // one ctMoScatter packet for the live units (dead spawns left out)
+        CommandPacket p;
+        p.type = CMD_SCATTER;
+        int owner = -1;
+        for (const std::string& a : l.args) {
+            if (spawnGone(a)) continue;
+            const int id = unitArg(a);
+            if (!alive(id)) continue;
+            p.unitIds.push_back(id);
+            owner = g_units[id].owner & 0x0F;
+        }
+        if (!p.unitIds.empty()) processCommandPacket(owner, p);
+        return true;
+    }
+    const int id = unitArg(arg(0));
+    if (!alive(id)) {
+        logf("script: tick %d line %d: no live unit %s: skipped", tick, l.number, arg(0).c_str());
+        return true;
+    }
+    UnitRecord& u = g_units[id];
+    CommandPacket p;
+    if (v == "poke") {                     // poke <unit> <offset> <size> <value>: the MapObject fields the scripts use
+        const int off = num(1), value = num(3);
+        if (off == 0x1E) u.damage = static_cast<int16_t>(value);
+        else if (off == 0x68 && (u.type == 0x15 || u.type == 0x16 || u.type == 0x2A)) u.mineLink = value;   // a mine's loads
+        else logf("script: tick %d line %d: poke offset %s is not supported here", tick, l.number, arg(1).c_str());
+    } else if (v == "route") {             // route <truck> <mine> <smelter>: the packet the UI sends
+        const int mine = unitArg(arg(1)), smelter = unitArg(arg(2));
+        int mx, my, sx, sy;
+        if (!alive(mine) || !alive(smelter) || !dockCell(mine, mx, my) || !dockCell(smelter, sx, sy)) return true;
+        p.type = CMD_CARGO_ROUTE;
+        p.waypoints = {packLocation(mx, my), packLocation(sx, sy), packLocation(mx, my)};
+        p.routeMineIdx = 0;
+        p.routeSmelterIdx = 1;
+        p.routeMine = mine;
+        p.routeSmelter = smelter;
+        runPacket(id, p);
+    } else if (v == "produce") {           // produce <factory> TYPE [weapon]: Unit::DoProduce's packet
+        p.type = CMD_PRODUCE;
+        p.arg0 = typeByName(arg(1));
+        p.arg1 = l.args.size() > 2 ? typeByName(arg(2)) : kMapIdNone;
+        p.arg2 = 0xFFFF;
+        runPacket(id, p);
+    } else if (v == "idle" || v == "unidle" || v == "load" || v == "unload") {   // Unit::DoSimpleCommand
+        p.type = v == "idle" ? CMD_IDLE : v == "unidle" ? CMD_UNIDLE : v == "load" ? CMD_LOAD_CARGO : CMD_UNLOAD_CARGO;
+        runPacket(id, p);
+    } else if (v == "train") {
+        p.type = CMD_TRAIN;
+        p.arg0 = num(1);
+        runPacket(id, p);
+    } else if (v == "research") {          // research <lab> <techID> <scientists>: the packet takes the topic's index
+        const int topic = techIndex(num(1));
+        if (topic < 0) { logf("script: research: no topic %s", arg(1).c_str()); return true; }
+        p.type = CMD_RESEARCH;
+        p.arg0 = topic;
+        p.arg1 = num(2);
+        runPacket(id, p);
+    } else if (v == "kit") {               // kit <convec> TYPE [weapon]: Unit::SetCargo(MapID, MapID)
+        if (u.flags & UNIT_VEHICLE) {
+            u.cargo = static_cast<uint16_t>(typeByName(arg(1)));
+            u.kitWeapon = static_cast<uint8_t>(l.args.size() > 2 ? typeByName(arg(2)) : kMapIdNone);
+        }
+    } else if (v == "cargo") {             // cargo <truck> <CargoType> <amount>: Unit::SetCargo(CargoType, int)
+        if (u.flags & UNIT_VEHICLE)
+            u.cargo = static_cast<uint16_t>((static_cast<uint16_t>(num(2) << 4) & ~0xFu) | (num(1) & 0xF));
+    } else if (v == "bay") {               // bay <factory> <bay> TYPE [weapon]: Unit::SetFactoryCargo
+        unitSetFactoryCargo(id, num(1), typeByName(arg(2)), l.args.size() > 3 ? typeByName(arg(3)) : kMapIdNone);
+    } else if (v == "transfercargo") {     // transfercargo <factory> <bay> [1]
+        p.type = CMD_XFER_CARGO;
+        p.arg0 = num(1);
+        p.arg1 = l.args.size() > 2 ? num(2) : 0;
+        runPacket(id, p);
+    } else if (v == "launch") {            // launch <spaceport> [x y]: a target in the original's (internal) pixels
+        p.type = CMD_LAUNCH;
+        if (l.args.size() > 2) {
+            p.arg0 = num(1) - std::max(0, g_gameMap.internalXOffset()) * 32;
+            p.arg1 = num(2);
+        }
+        runPacket(id, p);
+    } else if (v == "build") {             // build <convec> x y [TYPE]: the bottom-right tile of footprint plus margin
+        const int kit = l.args.size() > 3 ? typeByName(arg(3)) : static_cast<int>(u.cargo);
+        const StructSheetDesc* d = kit != kMapIdNone ? structSheet(kit) : nullptr;
+        if (!d) { logf("script: build: no ConVec kit"); return true; }
+        const int mask = g_gameMap.width() - 1, bx = tileX(l, num(1)), by = num(2);
+        p.type = CMD_BUILD;
+        p.waypoints.push_back(packLocation(bx, by));
+        p.rectL = (bx - d->sizeX - 1) & mask;
+        p.rectT = by - d->sizeY - 1;
+        p.rectR = bx;
+        p.rectB = by;
+        p.arg0 = -1;
+        runPacket(id, p);
+        logf("build: %s at (%s,%s)", codeNameOf(kit), arg(1).c_str(), arg(2).c_str());
+    } else if (v == "doze" || v == "buildwall") {   // doze <dozer> x1 y1 x2 y2 | buildwall <earthworker> x1 y1 x2 y2 [TYPE]
+        const int x1 = tileX(l, num(1)), y1 = num(2), x2 = tileX(l, num(3)), y2 = num(4);
+        p.rectL = x1;
+        p.rectT = y1;
+        if (v == "doze") {
+            p.type = CMD_DOZE;
+            p.rectR = x2;
+            p.rectB = y2;
+        } else {
+            p.type = CMD_BUILD_WALL;
+            p.rectR = x2 + 1;              // the packet's bottom-right is exclusive
+            p.rectB = y2 + 1;
+            p.arg0 = l.args.size() > 5 ? typeByName(arg(5)) : 0x11;
+        }
+        runPacket(id, p);
+    } else if (v == "removewall") {        // removewall <earthworker> x y
+        p.type = CMD_REMOVE_WALL;
+        p.rectL = p.rectR = tileX(l, num(1));
+        p.rectT = p.rectB = num(2);
+        runPacket(id, p);
+    } else if (v == "repairobj" || v == "reprogram" || v == "dismantle") {   // <unit> <target|none> [unit...]
+        p.type = v == "repairobj" ? CMD_REPAIR_OBJ : v == "reprogram" ? CMD_REPROGRAM : CMD_DISMANTLE;
+        p.unitIds.push_back(id);
+        for (size_t i = 2; i < l.args.size(); ++i) {
+            const int more = unitArg(arg(i));
+            if (more > 0 && more < static_cast<int>(g_units.size()) && g_units[more].id != -1) p.unitIds.push_back(more);
+        }
+        p.target = 0xFFFF0000u | static_cast<uint16_t>(arg(1) == "none" ? 0 : unitArg(arg(1)));
+        runPacket(id, p);
+    }
+    return true;
+}
+
 void runLine(GameState& gs, const Line& l, int tick) {
     std::string all;
     for (const std::string& a : l.args) all += " " + a;
@@ -164,6 +537,11 @@ void runLine(GameState& gs, const Line& l, int tick) {
     auto arg = [&](size_t i) { return i < l.args.size() ? l.args[i] : std::string(); };
     auto num = [&](size_t i) { return std::atoi(arg(i).c_str()); };
 
+    // A spawn that has died (or failed) gets no more orders: its index may belong to something else by then.
+    if (l.verb != "scatter" && spawnGone(arg(0))) {
+        logf("script: spawn %s is gone: skipped", arg(0).c_str());
+        return;
+    }
     if (l.verb == "spawn") {     // spawn TYPE owner x y [weapon|-] [dir 0-255]
         const int type = typeByName(arg(0)), weapon = typeByName(arg(4));
         const int dir = l.args.size() > 5 ? (num(5) & 0xFF) : 0;
@@ -192,9 +570,28 @@ void runLine(GameState& gs, const Line& l, int tick) {
         requestCenterView(tileX(l, num(0)) << 5, num(1) << 5);
         return;
     }
-    if (l.verb == "shot" || l.verb == "trace" || l.verb == "telemetry") return;   // captures run on their own
+    if (l.verb == "telemetry") { writeTelemetry(tick); return; }
+    if (l.verb == "shot" || l.verb == "trace") return;   // captures run on their own
+    if (l.verb == "group") { runGroup(l); return; }
+    if (runEco(l, tick)) return;
 
     // Orders: the first argument is the unit.
+    static const char* const orders[] = {
+        "move", "dock", "dockeg", "movewp", "standground", "patrol", "attack", "guard", "attackground", "lights", "stop",
+        "selfdestruct" };
+    if (std::none_of(std::begin(orders), std::end(orders), [&](const char* n) { return l.verb == n; })) {
+        // Verbs the original harness has that need what this mode doesn't do yet: real mouse and keyboard input to the
+        // game's window, recorded packets, saves. Any other verb is unknown to the original harness too, which logs
+        // it and goes on.
+        static const char* const later[] = {
+            "mouse", "click", "rclick", "mclick", "dblclick", "down", "up", "drag", "key", "keydown", "keyup", "type",
+            "select", "uilist", "hotkeys", "packet", "savegame", "loadgame", "gamespeed", "name", "quit" };
+        if (std::any_of(std::begin(later), std::end(later), [&](const char* n) { return l.verb == n; }))
+            logf("script: tick %d line %d: verb %s is not supported here", tick, l.number, l.verb.c_str());
+        else
+            logf("script: unknown verb %s", l.verb.c_str());
+        return;
+    }
     const int id = unitArg(arg(0));
     if (!alive(id)) {
         logf("script: tick %d line %d: no live unit %s: skipped", tick, l.number, arg(0).c_str());
@@ -231,8 +628,6 @@ void runLine(GameState& gs, const Line& l, int tick) {
         sendPacket(id, p);
     } else if (l.verb == "selfdestruct") {
         unitDoSelfDestruct(id);
-    } else {
-        logf("script: tick %d line %d: verb %s is not supported here", tick, l.number, l.verb.c_str());
     }
     (void)gs;
 }
@@ -293,6 +688,124 @@ void writeTrace(FILE* f, int tick) {
     std::fflush(f);
 }
 
+// ---- Telemetry -------------------------------------------------------------------------
+// telemetry.jsonl, as the harness's WriteTelemetry writes it: one line per sample with
+// each player's colony and every building and vehicle of each player. x/y are the
+// original's internal tiles (the port's tile + the x offset). With --eco, the colony's
+// allocation, food, population and morale fields as the harness names them, the unit
+// internals and the mining beacons. Fields the port doesn't model are left out (never
+// written as 0): eco's maxFood, morale08, morale24 and rcc, the raw `pi` dwords and the
+// units' `raw` bytes and `hive`.
+
+const char* commandName(int c) {
+    static const char* const names[] = {
+        "Nop", "Doze", "Move", "Dock", "DockEG", "Stop", "Build", "BuildWall", "RemoveWall", "Produce", "TransferCargo",
+        "LoadCargo", "UnloadCargo", "Recycle", "DumpCargo", "Scavenge", "SpecialWait", "Survey", "Idle", "Unidle",
+        "SelfDestruct", "Scatter", "Research", "TrainScientists", "Transfer", "Launch", "FlyInSpace", "Repair", "RepairObj",
+        "Reprogram", "Dismantle", "Salvage", "Create", "Develop", "UnDevelop", "LightToggle", "Attack", "Guard",
+        "StandGround", "CargoRoute", "Patrol", "MapChange", "Poof", "GameOpt", "GodWeapon", "ChatText", "ChatSFX", "Death",
+        "Chat", "Quit", "Ally", "GoAI", "MachineSettings", "InvalidCommand" };
+    return c >= 0 && c < static_cast<int>(sizeof(names) / sizeof(names[0])) ? names[c] : "?";
+}
+
+const char* actionName(int a) {
+    static const char* const names[] = {
+        "Done", "Move", "Build", "BuildMine", "Repair", "Develop", "ObjWait", "OperationalWait", "EMPWait", "Landing",
+        "ObjFroze", "DelSelf", "DoResearch", "ObjDocking", "Scavenge", "WeaponMove", "WeatherMove", "EMPRecover",
+        "WeaponAimCoarse", "WeaponAimFine", "SantaWalking", "Invalid" };
+    return a >= 0 && a < static_cast<int>(sizeof(names) / sizeof(names[0])) ? names[a] : "?";
+}
+
+int xOffset() { return std::max(0, g_gameMap.internalXOffset()); }
+
+void writeTelemUnit(FILE* f, bool& first, int id) {
+    if (!alive(id)) return;
+    const UnitRecord& r = g_units[id];
+    const int hp = maxHP(r);
+    std::fprintf(f, "%s{\"id\":%d,\"type\":\"%s\",\"owner\":%d,\"x\":%d,\"y\":%d,\"hp\":%d,\"maxHp\":%d,\"cmd\":\"%s\"",
+                 first ? "" : ",", id, codeName(r.type), r.owner & 0x0F, (unitOX(r) >> 5) + xOffset(), unitOY(r) >> 5,
+                 hp - r.damage, hp, commandName(r.action));
+    // Unit::GetWeapon is the +0x24 word of any vehicle: the weapon, a ConVec's kit, a truck's packed cargo.
+    if ((r.flags & UNIT_VEHICLE) && r.cargo > 0) std::fprintf(f, ",\"cargo\":\"%s\"", codeName(r.cargo));
+    if (g_eco) {
+        std::fprintf(f, ",\"flags\":%u,\"act\":\"%s\",\"timer\":%d,\"busy\":%d,\"w24\":%u", r.flags, actionName(r.field22),
+                     r.field3C, r.field20, static_cast<unsigned>(r.cargo));
+        if (r.type == mapCargoTruck) std::fprintf(f, ",\"truck\":[%d,%d]", r.cargo & 0xF, (r.cargo >> 4) & 0xFFF);
+        int dx, dy;
+        if ((r.flags & UNIT_BUILDING) && dockCell(id, dx, dy)) std::fprintf(f, ",\"dock\":[%d,%d]", dx + xOffset(), dy);
+    }
+    std::fputc('}', f);
+    first = false;
+}
+
+void writePlayerEco(FILE* f, int p) {
+    const ColonyState& c = g_colony[p];
+    std::fprintf(f, ",\"eco\":{\"maxCommon\":%d,\"maxRare\":%d,\"availWorkers\":%d,\"availScientists\":%d,"
+                    "\"workersReq\":%d,\"scientistsReq\":%d,\"sciAsWorkers\":%d,\"sciResearching\":%d,\"powerAvail\":%d,"
+                    "\"powerInactive\":%d,\"foodProd\":%d,\"foodCons\":%d,\"foodLacking\":%d,\"active\":%d,\"unpowered\":%d,"
+                    "\"recalc\":%d,\"starveCase\":%d,\"growth\":[%d,%d,0],\"death\":[%d,%d,%d],\"caps\":[%d,%d,%d,%d],"
+                    "\"activeCC\":%d,\"nurseries\":%d,\"universities\":%d,\"moraleEvent\":%d,\"morale10\":%d,"
+                    "\"resDemand\":%d,\"foodSupply\":%d,\"disabledRatio\":%d,\"recForumDemand\":%d,"
+                    "\"medDemand\":%d,\"unoccupied\":%d,\"sciAsWorkersPct\":%d}",
+                 c.oreCapacity, c.rareCapacity, c.workersLeft, c.scientistsLeft, c.workersRequired, c.scientistsRequired,
+                 c.scientistsAsWorkers, c.researchAssigned, c.powerLeft, c.powerIdle, c.foodProduced, c.foodEaten,
+                 c.foodDeficit, c.activeCount, c.unpoweredCount, c.dirty, c.starveRotor,
+                 c.accBirth, c.accGrowUp,                                   // kids +0x84, workers +0x80 (scientists +0x7C: none)
+                 c.accKidDeath, c.accWorkerDeath, c.accSciDeath,            // +0x88, +0x90, +0x8C
+                 c.stat(ST_RES_CAP), c.stat(ST_MED_CAP), c.stat(ST_REC_CAP), c.stat(ST_FORUM_CAP),
+                 c.stat(ST_CC_OP), c.stat(ST_NURSERY), c.stat(ST_UNIVERSITY), c.moraleEvents, c.moraleTrend, c.crowding,
+                 c.foodState, c.disabledPct, c.recreationLoad, c.medicalLoad, c.idlePct, c.phdPct);
+}
+
+int g_lastTelem = -1;
+
+void writeTelemetry(int tick) {
+    FILE* f = g_telem;
+    if (!f || tick == g_lastTelem) return;
+    g_lastTelem = tick;
+    std::fprintf(f, "{\"tick\":%d,\"mark\":%d,\"end\":%d,\"players\":[", tick, tick / 100, gameEndCode());
+    const int players = TethysGame::noPlayers();
+    for (int i = 0; i < players; ++i) {
+        const PlayerData& d = g_playerData[i];
+        const ColonyState& c = g_colony[i];
+        // SatelliteCounts (+0x08): RLVs in bits 0-3, solar satellites 4-7, the space bits from 8.
+        const unsigned sats = (d.rlvCount & 0xF) | (d.solarSat & 0xF) << 4 | d.spaceBits << 8;
+        std::fprintf(f, "%s{\"id\":%d,\"human\":%d,\"eden\":%d,\"food\":%d,\"commonOre\":%d,\"rareOre\":%d,\"workers\":%d,"
+                        "\"scientists\":%d,\"kids\":%d,\"morale\":%d,\"moraleLevel\":%d,\"event\":%d,\"satellites\":%u,"
+                        "\"powerGen\":%d,\"powerUsed\":%d,\"foodNet\":%d,\"buildings\":%d,\"idleBuildings\":%d,\"techs\":[",
+                     i ? "," : "", i, d.isHuman != 0, d.isEden != 0, d.foodStored, d.ore, d.rareOre, d.workers,
+                     d.scientists, d.kids, c.moraleValue, d.morale, c.moraleEvents, sats, c.powerGenerated,
+                     c.powerRequired, c.foodNet, c.structCount, c.inactiveCount);
+        bool first = true;
+        for (int t = 0; t < techCount(); ++t)
+            if (researchHas(i, t)) { std::fprintf(f, "%s%d", first ? "" : ",", techAt(t)->id); first = false; }
+        std::fputc(']', f);
+        if (g_eco) writePlayerEco(f, i);
+        std::fputc('}', f);
+    }
+    std::fputs("],\"units\":[", f);
+    bool first = true;
+    for (int p = 0; p < players; ++p) {         // each player's buildings, then its vehicles, as the harness lists them
+        for (int id : colonyStructures(p)) writeTelemUnit(f, first, id);
+        for (int id : colonyVehicles(p)) writeTelemUnit(f, first, id);
+    }
+    std::fputc(']', f);
+    if (g_eco) {
+        std::fputs(",\"beacons\":[", f);
+        first = true;
+        for (size_t id = 1; id < g_units.size(); ++id) {
+            const UnitRecord& r = g_units[id];
+            if (r.type != 0x51 || !alive(static_cast<int>(id))) continue;   // BEACON
+            std::fprintf(f, "%s{\"x\":%d,\"y\":%d,\"ore\":%d,\"bar\":%d,\"variant\":%d}", first ? "" : ",",
+                         (unitOX(r) >> 5) + xOffset(), unitOY(r) >> 5, r.beaconRare != 0, r.beaconYield, r.beaconVariant);
+            first = false;
+        }
+        std::fputc(']', f);
+    }
+    std::fputs("}\n", f);
+    std::fflush(f);
+}
+
 // ---- Screenshots -----------------------------------------------------------------------
 
 bool writeBmp(const std::string& path, const uint32_t* px, int w, int h) {
@@ -336,6 +849,8 @@ bool parse(int argc, char** argv, Options& o) {
         else if (a == "--seed") o.seed = std::atoi(next());
         else if (a == "--trace-every") o.traceEvery = std::atoi(next());
         else if (a == "--shot-every") o.shotEvery = std::atoi(next());
+        else if (a == "--telemetry-every") o.telemEvery = std::atoi(next());
+        else if (a == "--eco") o.eco = true;
         else if (a == "--show") o.show = true;
         else if (a == "--size") {
             if (std::sscanf(next(), "%dx%d", &o.width, &o.height) != 2) return false;
@@ -354,8 +869,8 @@ int runHarness(int argc, char** argv) {
     if (!parse(argc, argv, o)) return 2;
     g_log = std::fopen((o.out + "/harness.log").c_str(), "w");
     if (!g_log) { std::fprintf(stderr, "--harness: can't write %s/harness.log\n", o.out.c_str()); return 2; }
-    logf("harness: port, map=%s ticks=%d seed=%d trace=%d shot=%d", o.map.c_str(), o.ticks, o.seed, o.traceEvery,
-         o.shotEvery);
+    logf("harness: port, map=%s ticks=%d seed=%d trace=%d shot=%d telemetry=%d eco=%d", o.map.c_str(), o.ticks, o.seed,
+         o.traceEvery, o.shotEvery, o.telemEvery, o.eco ? 1 : 0);
     std::vector<Line> script;
     if (!o.script.empty() && !loadScript(o.script, script)) { logf("FATAL: can't read script %s", o.script.c_str()); return 2; }
     logf("script: %u commands from %s", static_cast<unsigned>(script.size()), o.script.c_str());
@@ -389,14 +904,18 @@ int runHarness(int argc, char** argv) {
          g_gameMap.internalXOffset(), TethysGame::noPlayers(), TethysGame::rng().s0(), TethysGame::rng().s1());
 
     FILE* trace = o.traceEvery > 0 ? std::fopen((o.out + "/trace.jsonl").c_str(), "w") : nullptr;
+    g_telem = o.telemEvery > 0 ? std::fopen((o.out + "/telemetry.jsonl").c_str(), "w") : nullptr;
+    g_eco = o.eco;
     size_t pos = 0;
-    int tick = 0, nextShot = 5;
+    int tick = 0, nextShot = 5, nextTelem = 0;
     const char* why = "tick limit";
     const Uint32 t0 = SDL_GetTicks();
     for (;;) {
         const bool ended = gs.simTick();
         tick = TethysGame::tick();
         while (pos < script.size() && script[pos].tick <= tick) runLine(gs, script[pos++], tick);
+        // Telemetry at the first tick, then at each multiple of the interval (the harness's g_nextTelem).
+        if (g_telem && tick >= nextTelem) { writeTelemetry(tick); nextTelem = (tick / o.telemEvery + 1) * o.telemEvery; }
         if (trace && tick % o.traceEvery == 0) writeTrace(trace, tick);
         if (o.shotEvery > 0 && tick >= nextShot) {
             takeShot(gs, renderer, o.out, tick);
@@ -407,6 +926,8 @@ int runHarness(int argc, char** argv) {
     }
     const double secs = (SDL_GetTicks() - t0) / 1000.0;
     if (o.shotEvery > 0 && tick % o.shotEvery) takeShot(gs, renderer, o.out, tick);
+    writeTelemetry(tick);                  // and one at the end
+    if (g_telem) std::fclose(g_telem);
     logf("quit at tick %d: %s (%.2fs, %.0f ticks/s)", tick, why, secs, tick / (secs > 0 ? secs : 1));
     if (trace) std::fclose(trace);
     std::fclose(g_log);
