@@ -10,6 +10,7 @@
 #include "structure.h"
 #include "colony.h"
 #include "save_game.h"
+#include "scenario.h"
 #include "save_stream.h"
 
 namespace op2 {
@@ -353,6 +354,12 @@ bool createUnit(Unit& out, map_id type, LOCATION loc, int owner,
                 (g_units[i].owner & 0x0F) == (owner & 0x0F)) ++n;
         r.serial = static_cast<uint8_t>(n + 1);
     }
+    // O construtor do beacon (MiningBeacon::Constructor) chama CreateBeacon(-1,
+    // -1, -1): todo beacon novo sorteia minerio, rendimento e variante (3
+    // sorteios do RNG do jogo), e o TethysGame::CreateBeacon da missao chama de
+    // novo com os argumentos dela. Sem isto o porte ficava 3 sorteios atras a
+    // cada beacon, e tudo o que a missao sorteava depois saia diferente.
+    if (type == 0x51) beaconInit(r, -1, -1, -1);
     unitListInsert(slot);                        // lista por Y (sub_439910)
     // sub_439FE0: prédio entra na lista do dono, ordenada por prioridade.
     if (r.flags & UNIT_BUILDING) colonyStructureAdded(slot);

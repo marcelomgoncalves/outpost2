@@ -232,7 +232,7 @@ int createUnitFromRecord(const MissionUnitRecord& rec, int x, int y, int owner, 
 }
 
 // vt[41] do beacon (sub_405540): −1 sorteia (raro < 30%, rendimento <20/≤80).
-static void beaconInit(UnitRecord& b, int commonRare, int yield, int variant) {
+void beaconInit(UnitRecord& b, int commonRare, int yield, int variant) {
     if (commonRare == -1) { if (TethysGame::getRand(100) < 0x1E) b.beaconRare = 1; }
     else if (commonRare == 1) b.beaconRare = 1;
     else if (commonRare == 0) b.beaconRare = 0;

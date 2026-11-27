@@ -9,6 +9,38 @@ details of each one are in [PORT_STATUS.BR.md](PORT_STATUS.BR.md)
 
 ---
 
+## 2026-11-27
+
+### Português
+
+**Corrigido**
+
+- **Os sorteios do início da missão como no original.** Todo beacon de
+  mineração novo sorteia minério, rendimento e variante ao ser criado, antes
+  de a missão dar os valores dela; o porte só sorteava o que a missão pedia.
+  Com três sorteios a menos por beacon, tudo o que a missão sorteava depois
+  (a posição dos outros beacons, das unidades, os desastres) saía diferente
+  do original. Nas cinco colônias do jogo o gerador de números aleatórios
+  agora está igual ao do original no tick 1, os beacons ficam nos mesmos
+  lugares, e as bases andam iguais até o tick 7.000–8.800 em CEP1, CPP1 e
+  CPS1 (antes divergiam no tick 1).
+
+### English
+
+**Fixed**
+
+- **The random draws at mission start as in the original.** Every new mining
+  beacon draws its ore, yield and variant when it is created, before the
+  mission gives its own values; the port only drew what the mission asked
+  for. Three draws short per beacon, everything the mission drew afterwards
+  (where the other beacons and units go, disasters) came out different from
+  the original. In the game's five colony games the random number generator
+  now equals the original's at tick 1, the beacons are in the same places,
+  and the bases play the same up to tick 7,000–8,800 in CEP1, CPP1 and CPS1
+  (they used to differ from tick 1).
+
+---
+
 ## 2026-11-26
 
 ### Português

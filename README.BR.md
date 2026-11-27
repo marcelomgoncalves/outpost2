@@ -239,6 +239,13 @@ cursores `.ANI`.
 
 ## Mudanças recentes
 
+### 2026-11-27
+
+- **Os beacons e o resto do início da missão saem como no original.** Cada
+  beacon novo faz os três sorteios que o original faz ao criá-lo; antes os
+  números aleatórios saíam do passo desde o início da missão, e os beacons,
+  as unidades e os desastres ficavam em outros lugares.
+
 ### 2026-11-26
 
 - **Os botões das abas como no original.** Numa missão só de unidades ficam

@@ -41,6 +41,8 @@ int scenarioCreateUnit(int type, int x, int y, int owner, int cargo, int rotatio
 int createUnitFromRecord(const MissionUnitRecord& rec, int x, int y, int owner, int lightsOn);
 // TethysGame::CreateBeacon. Devolve 1 se criou.
 int createBeacon(int type, int x, int y, int commonRare, int yield, int variant);
+// vt[41] do beacon (CreateBeacon do original): −1 sorteia o campo.
+void beaconInit(UnitRecord& b, int commonRare, int yield, int variant);
 // Beacon visível (pesquisado) p/ o jogador (vt[40] = sub_4054E0).
 bool beaconSurveyed(int id, int player);
 

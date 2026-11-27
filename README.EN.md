@@ -237,6 +237,13 @@ PBMP tilesets, the `op2_art` sprites, the data sheets and the `.ANI` cursors.
 
 ## Recent changes
 
+### 2026-11-27
+
+- **Beacons and the rest of the mission start come out as in the original.**
+  Each new beacon makes the three random draws the original makes when it
+  creates one; the random numbers used to fall out of step from the start of
+  a mission, and beacons, units and disasters ended up elsewhere.
+
 ### 2026-11-26
 
 - **Tab buttons as in the original.** In a units-only mission, Factories,
